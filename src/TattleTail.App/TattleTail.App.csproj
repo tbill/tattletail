@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>TattleTail</AssemblyName>
+    <RootNamespace>TattleTail.App</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Version>0.1.0</Version>
+    <Product>TattleTail</Product>
+    <Description>See which programs are talking to the network, and how much.</Description>
+    <!-- Lets the project build on non-Windows machines (e.g. CI or Linux dev boxes). -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TattleTail.Core\TattleTail.Core.csproj" />
+  </ItemGroup>
+
+</Project>

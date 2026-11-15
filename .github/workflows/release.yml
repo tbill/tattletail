@@ -1,0 +1,52 @@
+name: Release
+
+# Push a tag like "v0.1.0" to build the app and attach it to a GitHub release.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Test
+        run: dotnet test TattleTail.sln -c Release
+
+      - name: Work out version from tag
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Publish standalone exe (no .NET install needed)
+        run: >
+          dotnet publish src/TattleTail.App -c Release -r win-x64 --self-contained true
+          -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:EnableCompressionInSingleFile=true -p:DebugType=none
+          -p:Version=${{ env.VERSION }} -o out/standalone
+
+      - name: Publish small build (needs .NET 8 Desktop Runtime)
+        run: >
+          dotnet publish src/TattleTail.App -c Release -r win-x64 --self-contained false
+          -p:PublishSingleFile=true -p:DebugType=none
+          -p:Version=${{ env.VERSION }} -o out/framework
+
+      - name: Package
+        run: |
+          Copy-Item out/standalone/TattleTail.exe "TattleTail-${{ github.ref_name }}-win-x64.exe"
+          Compress-Archive -Path out/framework/* -DestinationPath "TattleTail-${{ github.ref_name }}-win-x64-requires-dotnet.zip"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            TattleTail-${{ github.ref_name }}-win-x64.exe
+            TattleTail-${{ github.ref_name }}-win-x64-requires-dotnet.zip
