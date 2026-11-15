@@ -134,15 +134,14 @@ tests/TattleTail.Core.Tests xUnit tests for the counting logic
 
 ## Releasing
 
-Push a version tag and GitHub Actions builds both downloads and attaches them to a release:
+Versions are named **year-month.Release**: `v26-11.R2.0` is the 2nd release, made in November 2026
+(the last number is for patches: `v26-11.R2.1`).
 
-```bash
-git tag v0.1.0
-```
-
-```bash
-git push origin v0.1.0
-```
+To release, go to **Releases → Draft a new release**, type a new tag in that form, target `main`,
+and click **Publish release**. GitHub Actions builds both downloads and attaches them, usually
+within about 3 minutes. Inside the app, the window title and the file's
+**Properties → Details** show the version: product version `26-11.R2.0`, file version `26.11.2.0`
+(Windows needs four plain numbers). Builds that aren't releases say "dev build" and their commit.
 
 ## Testing on Windows
 

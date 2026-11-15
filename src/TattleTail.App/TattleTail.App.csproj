@@ -9,7 +9,10 @@
     <AssemblyName>TattleTail</AssemblyName>
     <RootNamespace>TattleTail.App</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>0.2.0</Version>
+    <!-- Releases get their version from the tag (see .github/workflows/release.yml).
+         Everything else is a "dev" build, labelled with its git commit. -->
+    <Version>0.0.0.0</Version>
+    <InformationalVersion>dev</InformationalVersion>
     <Product>TattleTail</Product>
     <Description>See which programs are talking to the network, and how much.</Description>
     <!-- Lets the project build on non-Windows machines (e.g. CI or Linux dev boxes). -->

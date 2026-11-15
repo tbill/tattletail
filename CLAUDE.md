@@ -10,6 +10,12 @@ Windows network monitor (C# / .NET 8 / WPF). See README.md for features and layo
   `--smoke-test` and checks it sees connections, traffic, names and history. Read the smoke
   report from the job log ("Smoke test" step); artifact downloads may be blocked.
 
+## Releases
+- Version scheme is year-month.Release: tags like `v26-11.R2.0` (patch: `v26-11.R2.1`).
+  The release workflow maps them to file version `26.11.2.0`.
+- This session's GitHub access can't create tags or releases; the owner publishes releases from
+  the GitHub web UI, then the Release workflow attaches the downloads.
+
 ## Building on Linux
 - Needs Microsoft's .NET 8 SDK (it includes the WindowsDesktop SDK); Ubuntu's own `dotnet-sdk-8.0`
   package lacks it. `EnableWindowsTargeting` lets the WPF app build on Linux.
