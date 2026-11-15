@@ -42,7 +42,7 @@ jobs:
           $report = Join-Path $PWD 'smoke.json'
           $app = Start-Process publish/TattleTail.exe -ArgumentList '--smoke-test', "`"$report`"", '25' -PassThru
           Start-Sleep -Seconds 6
-          foreach ($url in 'https://github.com', 'https://www.microsoft.com', 'https://www.wikipedia.org', 'https://api.nuget.org/v3/index.json') {
+          foreach ($url in 'https://github.com', 'https://api.github.com', 'https://www.microsoft.com', 'https://www.wikipedia.org', 'https://api.nuget.org/v3/index.json') {
             try { Invoke-WebRequest $url -UseBasicParsing -TimeoutSec 15 | Out-Null } catch { Write-Host "request to $url failed: $_" }
           }
           if (-not $app.WaitForExit(120000)) { $app.Kill(); throw 'TattleTail did not finish the smoke test in time' }

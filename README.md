@@ -15,6 +15,9 @@ history charts going back 30 days.
   30 days. Click a program to chart just that program; hover the chart to read exact numbers.
 - **Servers list:** next to the chart, every website or address the selected program (or all
   programs) talked to in that time range, with bytes sent and received and when it was last seen.
+- **Group by domain:** the servers list shows one row per domain, so `github.com`,
+  `api.github.com` and `lb-140-82-113-23-iad.github.com` are all under **github.com**. Click a
+  domain to see its individual hosts. The Connections tab also has a Domain column.
 - **Website names, or IP addresses, or both:** pick with **Show servers as**. Hover any
   server to see both.
 - **Connections tab:** every TCP/UDP socket with local address, remote server, port, state,
@@ -59,6 +62,15 @@ Windows 10 or 11 (64-bit) is required.
    "what's the name of this address?". Answers are often server names like
    `lb-140-82-112-3-iad.github.com` rather than the friendly site name. Untick **Reverse DNS**
    if you don't want TattleTail to send any lookups of its own.
+
+## How domains are worked out
+
+Keeping just the last two parts of a name works for `api.github.com`, but not for
+`news.bbc.co.uk`, whose domain is `bbc.co.uk`. TattleTail uses the
+[Public Suffix List](https://publicsuffix.org/), the same list browsers use, to know which
+endings (`.com`, `.co.uk`, `.com.au`, …) are public. Only the list's official (ICANN) section
+is used, so hosting services group together: every `*.cloudfront.net` server shows under
+`cloudfront.net` instead of as hundreds of separate domains.
 
 ## Where history is kept
 
@@ -139,7 +151,6 @@ checks the report shows connections, traffic, website names and history.
 
 ## Ideas for later
 
-- Group servers by domain (e.g. all `*.googlevideo.com` hosts under `googlevideo.com`)
 - Country and a world map for remote servers
 - Show whether each program is digitally signed, and by whom
 - System-tray icon with an alert when a new program connects
@@ -147,4 +158,4 @@ checks the report shows connections, traffic, website names and history.
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). Third-party components are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

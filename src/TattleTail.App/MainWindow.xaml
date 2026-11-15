@@ -134,6 +134,9 @@
                             <ComboBox DockPanel.Dock="Right" Width="150"
                                       ItemsSource="{Binding Ranges}" DisplayMemberPath="Label" SelectedValuePath="Value"
                                       SelectedValue="{Binding Range}" />
+                            <CheckBox DockPanel.Dock="Right" Content="Group by domain" VerticalAlignment="Center" Margin="0,0,12,0"
+                                      IsChecked="{Binding GroupByDomain}"
+                                      ToolTip="Show one row per domain (e.g. github.com) instead of one per host. Click a domain to see its hosts." />
                         </DockPanel>
 
                         <Grid>
@@ -155,14 +158,57 @@
                             <GridSplitter Grid.Column="1" HorizontalAlignment="Center" VerticalAlignment="Stretch" Width="4"
                                           Background="#FFE0E0E0" ShowsPreview="False" />
 
-                            <DataGrid Grid.Column="2" Style="{StaticResource ReadOnlyGrid}" ItemsSource="{Binding ServersView}">
+                            <DataGrid Grid.Column="2" Style="{StaticResource ReadOnlyGrid}" ItemsSource="{Binding ServersView}"
+                                      SelectionMode="Single" RowDetailsVisibilityMode="VisibleWhenSelected">
                                 <DataGrid.RowStyle>
                                     <Style TargetType="DataGridRow">
                                         <Setter Property="ToolTip" Value="{Binding Details}" />
                                     </Style>
                                 </DataGrid.RowStyle>
+                                <!-- Selecting a domain row opens its list of hosts -->
+                                <DataGrid.RowDetailsTemplate>
+                                    <DataTemplate>
+                                        <DataGrid Style="{StaticResource ReadOnlyGrid}" ItemsSource="{Binding ChildrenView}"
+                                                  HeadersVisibility="None" Margin="22,0,0,4" MaxHeight="220" BorderThickness="0"
+                                                  Background="Transparent" RowBackground="#FFFDFDFD" AlternatingRowBackground="#FFF5F7FA"
+                                                  Visibility="{Binding IsDomain, Converter={StaticResource BoolToVisibility}}">
+                                            <DataGrid.RowStyle>
+                                                <Style TargetType="DataGridRow">
+                                                    <Setter Property="ToolTip" Value="{Binding Details}" />
+                                                </Style>
+                                            </DataGrid.RowStyle>
+                                            <DataGrid.Columns>
+                                                <DataGridTextColumn Binding="{Binding Server}" Width="*" />
+                                                <DataGridTextColumn Binding="{Binding SentText}" Width="75" ElementStyle="{StaticResource NumberCell}" />
+                                                <DataGridTextColumn Binding="{Binding ReceivedText}" Width="75" ElementStyle="{StaticResource NumberCell}" />
+                                                <DataGridTextColumn Binding="{Binding LastSeenText}" Width="80" />
+                                            </DataGrid.Columns>
+                                        </DataGrid>
+                                    </DataTemplate>
+                                </DataGrid.RowDetailsTemplate>
                                 <DataGrid.Columns>
+                                    <DataGridTemplateColumn Width="18" CanUserSort="False" CanUserResize="False">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <TextBlock HorizontalAlignment="Center" Foreground="#FF777777"
+                                                           Visibility="{Binding IsDomain, Converter={StaticResource BoolToVisibility}}">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Text" Value="▸" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=DataGridRow}}" Value="True">
+                                                                    <Setter Property="Text" Value="▾" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
                                     <DataGridTextColumn Header="Server" Binding="{Binding Server}" Width="*" />
+                                    <DataGridTextColumn Header="Hosts" Binding="{Binding HostCountText}" SortMemberPath="HostCount"
+                                                        Width="45" ElementStyle="{StaticResource NumberCell}" />
                                     <DataGridTextColumn Header="Programs" Binding="{Binding Programs}" SortMemberPath="ProgramCount"
                                                         Width="90" />
                                     <DataGridTextColumn Header="Sent" Binding="{Binding SentText}" SortMemberPath="SentBytes"
@@ -198,6 +244,7 @@
                                 </Style>
                             </DataGridTextColumn.CellStyle>
                         </DataGridTextColumn>
+                        <DataGridTextColumn Header="Domain" Binding="{Binding RemoteDomain}" Width="140" />
                         <DataGridTextColumn Header="Port" Binding="{Binding RemotePortText}" SortMemberPath="RemotePort"
                                             Width="55" ElementStyle="{StaticResource NumberCell}" />
                         <DataGridTextColumn Header="State" Binding="{Binding State}" Width="90" />

@@ -1,3 +1,6 @@
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Windows.Data;
 using TattleTail.Core;
 
 namespace TattleTail.App.ViewModels;
@@ -13,12 +16,47 @@ public sealed class ServerRow : ObservableObject
     private long _received;
     private DateTime _lastSeenLocal;
 
-    public ServerRow(string key)
+    private ICollectionView? _childrenView;
+
+    public ServerRow(string key, bool isDomain = false)
     {
         Key = key;
+        IsDomain = isDomain;
     }
 
     public string Key { get; }
+
+    /// <summary>True for a domain row (e.g. "github.com") that groups several host rows.</summary>
+    public bool IsDomain { get; }
+
+    /// <summary>The individual hosts inside a domain row, shown when the row is expanded.</summary>
+    public ObservableCollection<ServerRow> Children { get; } = new();
+
+    public ICollectionView ChildrenView
+    {
+        get
+        {
+            if (_childrenView is null)
+            {
+                var view = (ListCollectionView)CollectionViewSource.GetDefaultView(Children);
+                view.SortDescriptions.Add(new SortDescription(nameof(TotalBytes), ListSortDirection.Descending));
+                view.IsLiveSorting = true;
+                _childrenView = view;
+            }
+
+            return _childrenView;
+        }
+    }
+
+    public int HostCount => Children.Count;
+    public string HostCountText => IsDomain ? Children.Count.ToString() : string.Empty;
+
+    /// <summary>Lets the window refresh <see cref="HostCount"/> after children change.</summary>
+    public void NotifyChildrenChanged()
+    {
+        OnPropertyChanged(nameof(HostCount));
+        OnPropertyChanged(nameof(HostCountText));
+    }
 
     public string Server { get => _server; set => SetField(ref _server, value); }
 
@@ -76,5 +114,6 @@ public sealed class ServerRow : ObservableObject
 
     public bool Matches(string filter) =>
         Server.Contains(filter, StringComparison.OrdinalIgnoreCase)
-        || Details.Contains(filter, StringComparison.OrdinalIgnoreCase);
+        || Details.Contains(filter, StringComparison.OrdinalIgnoreCase)
+        || Children.Any(c => c.Matches(filter));
 }

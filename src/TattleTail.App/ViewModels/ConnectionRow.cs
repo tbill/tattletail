@@ -42,6 +42,11 @@ public sealed class ConnectionRow : TrafficRowBase
         ? null
         : _remoteName is null || _remoteName == RemoteIp.ToString() ? RemoteIp.ToString() : $"{_remoteName}\n{RemoteIp}";
 
+    /// <summary>The website's domain, e.g. "github.com" for "api.github.com".</summary>
+    public string RemoteDomain => RemoteIp is null
+        ? string.Empty
+        : PublicSuffixList.Default.GetDomain(_remoteName ?? RemoteIp.ToString());
+
     public string RemotePortText => RemotePort == 0 ? string.Empty : RemotePort.ToString();
 
     public string State
@@ -61,6 +66,7 @@ public sealed class ConnectionRow : TrafficRowBase
         _display = display;
         OnPropertyChanged(nameof(RemoteText));
         OnPropertyChanged(nameof(RemoteDetails));
+        OnPropertyChanged(nameof(RemoteDomain));
     }
 
     public static string MakeId(ConnectionInfo info) =>

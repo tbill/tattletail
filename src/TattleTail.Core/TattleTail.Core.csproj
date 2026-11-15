@@ -13,6 +13,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Mozilla Public Suffix List (MPL-2.0), used to group hosts by domain. -->
+    <EmbeddedResource Include="Names\Data\public_suffix_list.dat" LogicalName="TattleTail.Core.public_suffix_list.dat" />
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="TattleTail.Core.Tests" />
   </ItemGroup>
 

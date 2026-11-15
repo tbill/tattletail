@@ -108,6 +108,26 @@ public sealed class HistoryPanelViewModel : ObservableObject
         }
     }
 
+    /// <summary>Show one row per domain (e.g. "github.com") with its hosts inside.</summary>
+    public bool GroupByDomain
+    {
+        get => _settings.GroupServersByDomain;
+        set
+        {
+            if (_settings.GroupServersByDomain == value)
+            {
+                return;
+            }
+
+            _settings.GroupServersByDomain = value;
+            _settings.Save();
+            OnPropertyChanged();
+            Servers.Clear();
+            _serversByKey.Clear();
+            RequestRefresh();
+        }
+    }
+
     public string Filter
     {
         get => _filter;
@@ -182,7 +202,7 @@ public sealed class HistoryPanelViewModel : ObservableObject
                 UpdateServers(remotes);
                 TotalsText = $"{HistoryRanges.Describe(range)}:  ↑ {ByteFormatter.Format(remotes.Sum(r => r.Sent))} sent" +
                              $"   ↓ {ByteFormatter.Format(remotes.Sum(r => r.Received))} received" +
-                             $"   ·  {Servers.Count} servers";
+                             (GroupByDomain ? $"   ·  {Servers.Count} domains" : $"   ·  {Servers.Count} servers");
             }
         }
         finally
@@ -191,50 +211,109 @@ public sealed class HistoryPanelViewModel : ObservableObject
         }
     }
 
+    /// <summary>Everything we know about one host (or one address, depending on the display mode).</summary>
+    private sealed record HostSummary(
+        string Key, string Name, string Domain, string Display, List<string> Ips, List<string> Programs,
+        long Sent, long Received, long LastMinute);
+
     private void UpdateServers(List<HistoryRow> remotes)
     {
-        var groups = remotes
+        var hosts = remotes
             .Select(r => (Row: r, Name: BestName(r)))
             .GroupBy(x => _display switch
             {
                 AddressDisplay.Names => x.Name,
                 AddressDisplay.Addresses => x.Row.Ip,
                 _ => x.Name + "|" + x.Row.Ip,
-            });
-
-        var seen = new HashSet<string>();
-        foreach (var group in groups)
-        {
-            seen.Add(group.Key);
-            if (!_serversByKey.TryGetValue(group.Key, out var row))
+            })
+            .Select(g =>
             {
-                row = new ServerRow(group.Key);
-                _serversByKey[group.Key] = row;
-                Servers.Add(row);
+                var first = g.First();
+                return new HostSummary(
+                    g.Key,
+                    first.Name,
+                    PublicSuffixList.Default.GetDomain(first.Name),
+                    _display == AddressDisplay.Names ? first.Name : AddressFormatter.Format(first.Name, first.Row.Ip, _display),
+                    g.Select(x => x.Row.Ip).Distinct().ToList(),
+                    g.Select(x => DisplayName(x.Row.Program)).Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+                    g.Sum(x => x.Row.Sent),
+                    g.Sum(x => x.Row.Received),
+                    g.Max(x => x.Row.Minute));
+            })
+            .ToList();
+
+        if (!GroupByDomain)
+        {
+            Sync(Servers, _serversByKey, hosts, h => h.Key, (key, _) => new ServerRow(key), (row, host) => Fill(row, host));
+            return;
+        }
+
+        var domains = hosts.GroupBy(h => h.Domain).ToList();
+        Sync(Servers, _serversByKey, domains, d => "domain:" + d.Key, (key, _) => new ServerRow(key, isDomain: true),
+            (row, domain) =>
+            {
+                var children = domain.ToList();
+                var programs = children.SelectMany(h => h.Programs).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+                row.Server = domain.Key;
+                row.Details = $"{children.Count} host(s):\n" +
+                              string.Join("\n", children.OrderByDescending(h => h.Sent + h.Received).Take(15).Select(h => "  " + h.Display)) +
+                              (children.Count > 15 ? "\n  …" : string.Empty) +
+                              "\nPrograms: " + string.Join(", ", programs);
+                row.Programs = string.Join(", ", programs);
+                row.ProgramCount = programs.Count;
+                row.SentBytes = children.Sum(h => h.Sent);
+                row.ReceivedBytes = children.Sum(h => h.Received);
+                row.LastSeenLocal = ToLocal(children.Max(h => h.LastMinute));
+
+                var childMap = row.Children.ToDictionary(c => c.Key);
+                Sync(row.Children, childMap, children, h => h.Key, (key, _) => new ServerRow(key), (child, host) => Fill(child, host));
+                row.NotifyChildrenChanged();
+            });
+    }
+
+    private static void Fill(ServerRow row, HostSummary host)
+    {
+        row.Server = host.Display;
+        row.Details = string.Join("\n",
+            new[] { host.Name }.Concat(host.Ips.Where(ip => ip != host.Name)).Append("Programs: " + string.Join(", ", host.Programs)));
+        row.Programs = string.Join(", ", host.Programs);
+        row.ProgramCount = host.Programs.Count;
+        row.SentBytes = host.Sent;
+        row.ReceivedBytes = host.Received;
+        row.LastSeenLocal = ToLocal(host.LastMinute);
+    }
+
+    /// <summary>
+    /// Makes <paramref name="rows"/> match <paramref name="items"/>: updates rows that exist, adds new
+    /// ones and removes ones that are gone. Updating in place keeps the user's scroll position and selection.
+    /// </summary>
+    private static void Sync<T>(ObservableCollection<ServerRow> rows, Dictionary<string, ServerRow> byKey, IEnumerable<T> items,
+        Func<T, string> keyOf, Func<string, T, ServerRow> create, Action<ServerRow, T> fill)
+    {
+        var seen = new HashSet<string>();
+        foreach (var item in items)
+        {
+            var key = keyOf(item);
+            seen.Add(key);
+            if (!byKey.TryGetValue(key, out var row))
+            {
+                row = create(key, item);
+                byKey[key] = row;
+                rows.Add(row);
             }
 
-            var first = group.First();
-            var ips = group.Select(x => x.Row.Ip).Distinct().ToList();
-            var programs = group.Select(x => DisplayName(x.Row.Program)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-
-            row.Server = _display == AddressDisplay.Names
-                ? first.Name
-                : AddressFormatter.Format(first.Name, first.Row.Ip, _display);
-            row.Details = string.Join("\n",
-                new[] { first.Name }.Concat(ips.Where(ip => ip != first.Name)).Append("Programs: " + string.Join(", ", programs)));
-            row.Programs = string.Join(", ", programs);
-            row.ProgramCount = programs.Count;
-            row.SentBytes = group.Sum(x => x.Row.Sent);
-            row.ReceivedBytes = group.Sum(x => x.Row.Received);
-            row.LastSeenLocal = DateTime.UnixEpoch.AddMinutes(group.Max(x => x.Row.Minute)).ToLocalTime();
+            fill(row, item);
         }
 
-        foreach (var gone in _serversByKey.Keys.Where(k => !seen.Contains(k)).ToList())
+        foreach (var gone in byKey.Keys.Where(k => !seen.Contains(k)).ToList())
         {
-            Servers.Remove(_serversByKey[gone]);
-            _serversByKey.Remove(gone);
+            rows.Remove(byKey[gone]);
+            byKey.Remove(gone);
         }
     }
+
+    private static DateTime ToLocal(long unixMinute) => DateTime.UnixEpoch.AddMinutes(unixMinute).ToLocalTime();
 
     /// <summary>
     /// The stored name, unless only the IP was known when the row was saved and we've

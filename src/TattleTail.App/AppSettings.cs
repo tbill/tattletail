@@ -17,6 +17,7 @@ public sealed class AppSettings
     public AddressDisplay AddressDisplay { get; set; } = AddressDisplay.Names;
     public bool ReverseDnsLookups { get; set; } = true;
     public bool ShowExitedPrograms { get; set; } = true;
+    public bool GroupServersByDomain { get; set; } = true;
     public HistoryRange HistoryRange { get; set; } = HistoryRange.TenMinutes;
     public int HistoryRetentionDays { get; set; } = 30;
 
