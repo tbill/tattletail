@@ -70,7 +70,8 @@ Keeping just the last two parts of a name works for `api.github.com`, but not fo
 [Public Suffix List](https://publicsuffix.org/), the same list browsers use, to know which
 endings (`.com`, `.co.uk`, `.com.au`, …) are public. Only the list's official (ICANN) section
 is used, so hosting services group together: every `*.cloudfront.net` server shows under
-`cloudfront.net` instead of as hundreds of separate domains.
+`cloudfront.net` instead of as hundreds of separate domains. A GitHub Action refreshes the list on the 1st of
+every month and commits the update only if all tests still pass.
 
 ## Where history is kept
 
