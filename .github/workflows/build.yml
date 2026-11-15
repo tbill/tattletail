@@ -40,12 +40,20 @@ jobs:
       - name: Smoke test
         run: |
           $report = Join-Path $PWD 'smoke.json'
-          $app = Start-Process publish/TattleTail.exe -ArgumentList '--smoke-test', "`"$report`"", '25' -PassThru
+          $app = Start-Process publish/TattleTail.exe -ArgumentList '--smoke-test', "`"$report`"", '35' -PassThru
           Start-Sleep -Seconds 6
+
+          # A second copy must hand over to the first and exit, not steal its event feeds.
+          # The web requests below come after this, so the report also proves the first copy kept counting.
+          $second = Start-Process publish/TattleTail.exe -PassThru
+          if (-not $second.WaitForExit(20000)) { $second.Kill(); throw 'A second TattleTail did not exit while the first was running' }
+          Write-Host "Second copy exited by itself (exit code $($second.ExitCode))"
+          if ($app.HasExited) { throw 'The first TattleTail exited when a second copy started' }
+
           foreach ($url in 'https://github.com', 'https://api.github.com', 'https://www.microsoft.com', 'https://www.wikipedia.org', 'https://api.nuget.org/v3/index.json') {
             try { Invoke-WebRequest $url -UseBasicParsing -TimeoutSec 15 | Out-Null } catch { Write-Host "request to $url failed: $_" }
           }
-          if (-not $app.WaitForExit(120000)) { $app.Kill(); throw 'TattleTail did not finish the smoke test in time' }
+          if (-not $app.WaitForExit(150000)) { $app.Kill(); throw 'TattleTail did not finish the smoke test in time' }
           if (-not (Test-Path $report)) { throw "No smoke test report (exit code $($app.ExitCode))" }
           Get-Content $report
           $result = Get-Content $report -Raw | ConvertFrom-Json
