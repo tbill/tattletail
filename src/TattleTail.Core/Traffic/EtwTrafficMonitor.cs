@@ -86,8 +86,8 @@ public sealed class EtwTrafficMonitor : IDisposable
     private void Record(Protocol protocol, int processId, IPAddress localAddress, int localPort,
         IPAddress remoteAddress, int remotePort, int size, Direction direction)
     {
-        var remote = protocol == Protocol.Tcp ? new IPEndPoint(remoteAddress, remotePort) : null;
-        _aggregator.Record(protocol, processId, new IPEndPoint(localAddress, localPort), remote, size, direction);
+        _aggregator.Record(protocol, processId, new IPEndPoint(localAddress, localPort),
+            new IPEndPoint(remoteAddress, remotePort), size, direction);
     }
 
     public void Stop()

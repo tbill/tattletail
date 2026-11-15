@@ -18,20 +18,26 @@ public readonly record struct TrafficCounter(long Sent, long Received)
         : this with { Received = Received + bytes };
 }
 
+/// <summary>Identifies "this program talking to that server address".</summary>
+public readonly record struct RemoteKey(int ProcessId, IPAddress Address);
+
 /// <summary>A point-in-time copy of everything the aggregator has counted.</summary>
 public sealed record TrafficSnapshot(
     IReadOnlyDictionary<TrafficKey, TrafficCounter> ByConnection,
     IReadOnlyDictionary<int, TrafficCounter> ByProcess,
+    IReadOnlyDictionary<RemoteKey, TrafficCounter> ByRemote,
     DateTime TakenAtUtc);
 
 /// <summary>
-/// Thread-safe running totals of network traffic, per connection and per process.
-/// The ETW listener writes into it from a background thread; the UI reads snapshots.
+/// Thread-safe running totals of network traffic: per connection, per process, and per
+/// process + remote address. The ETW listener writes into it from a background thread;
+/// the UI reads snapshots.
 /// </summary>
 public sealed class TrafficAggregator
 {
     private readonly object _gate = new();
     private readonly Dictionary<TrafficKey, (TrafficCounter Counter, DateTime LastSeenUtc)> _byConnection = new();
+    private readonly Dictionary<RemoteKey, (TrafficCounter Counter, DateTime LastSeenUtc)> _byRemote = new();
     private readonly Dictionary<int, TrafficCounter> _byProcess = new();
     private readonly Func<DateTime> _clock;
 
@@ -52,13 +58,22 @@ public sealed class TrafficAggregator
             return;
         }
 
-        var key = TrafficKey.For(protocol, processId, local, remote);
+        // UDP rows in the connection table have no remote side, but the remote address is
+        // still useful for "which servers did this program talk to".
+        var connectionKey = TrafficKey.For(protocol, processId, local, protocol == Protocol.Tcp ? remote : null);
+        RemoteKey? remoteKey = remote is null ? null : new RemoteKey(processId, IpAddresses.Normalize(remote.Address));
         var now = _clock();
 
         lock (_gate)
         {
-            _byConnection.TryGetValue(key, out var entry);
-            _byConnection[key] = (entry.Counter.Add(direction, bytes), now);
+            _byConnection.TryGetValue(connectionKey, out var entry);
+            _byConnection[connectionKey] = (entry.Counter.Add(direction, bytes), now);
+
+            if (remoteKey is { } rk)
+            {
+                _byRemote.TryGetValue(rk, out var remoteEntry);
+                _byRemote[rk] = (remoteEntry.Counter.Add(direction, bytes), now);
+            }
 
             _byProcess.TryGetValue(processId, out var processCounter);
             _byProcess[processId] = processCounter.Add(direction, bytes);
@@ -72,27 +87,35 @@ public sealed class TrafficAggregator
             return new TrafficSnapshot(
                 _byConnection.ToDictionary(kv => kv.Key, kv => kv.Value.Counter),
                 new Dictionary<int, TrafficCounter>(_byProcess),
+                _byRemote.ToDictionary(kv => kv.Key, kv => kv.Value.Counter),
                 _clock());
         }
     }
 
     /// <summary>
-    /// Forgets per-connection counters that have had no traffic for <paramref name="maxIdle"/>,
-    /// so long-running sessions don't grow without bound. Per-process totals are kept.
+    /// Forgets per-connection and per-remote counters that have had no traffic for
+    /// <paramref name="maxIdle"/>, so long-running sessions don't grow without bound.
+    /// Per-process totals are kept.
     /// </summary>
     public int PruneConnections(TimeSpan maxIdle)
     {
         var cutoff = _clock() - maxIdle;
         lock (_gate)
         {
-            var stale = _byConnection.Where(kv => kv.Value.LastSeenUtc < cutoff).Select(kv => kv.Key).ToList();
-            foreach (var key in stale)
-            {
-                _byConnection.Remove(key);
-            }
-
-            return stale.Count;
+            return RemoveStale(_byConnection, cutoff) + RemoveStale(_byRemote, cutoff);
         }
+    }
+
+    private static int RemoveStale<TKey>(Dictionary<TKey, (TrafficCounter Counter, DateTime LastSeenUtc)> map, DateTime cutoff)
+        where TKey : notnull
+    {
+        var stale = map.Where(kv => kv.Value.LastSeenUtc < cutoff).Select(kv => kv.Key).ToList();
+        foreach (var key in stale)
+        {
+            map.Remove(key);
+        }
+
+        return stale.Count;
     }
 
     public void Reset()
@@ -100,6 +123,7 @@ public sealed class TrafficAggregator
         lock (_gate)
         {
             _byConnection.Clear();
+            _byRemote.Clear();
             _byProcess.Clear();
         }
     }

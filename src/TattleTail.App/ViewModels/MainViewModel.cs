@@ -1,37 +1,68 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Net;
 using System.Windows.Data;
 using System.Windows.Threading;
 using TattleTail.Core;
 
 namespace TattleTail.App.ViewModels;
 
+public sealed record AddressDisplayOption(AddressDisplay Value, string Label);
+
 /// <summary>
-/// The brains behind the main window. Once a second it reads the connection table,
-/// takes a traffic snapshot, and updates the two tables.
+/// The brains behind the main window. Once a second it reads the connection table, takes a
+/// traffic snapshot, records history, and updates the tables and chart.
 /// </summary>
 public sealed class MainViewModel : ObservableObject, IDisposable
 {
     private static readonly TimeSpan RefreshInterval = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan ConnectionTrafficRetention = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan PruneInterval = TimeSpan.FromHours(1);
 
+    private readonly AppSettings _settings;
     private readonly TrafficAggregator _aggregator = new();
-    private readonly EtwTrafficMonitor _monitor;
+    private readonly EtwTrafficMonitor _trafficMonitor;
+    private readonly HostNameCache _names = new();
+    private readonly EtwDnsMonitor _dnsMonitor;
     private readonly ProcessNameResolver _resolver = new();
+    private readonly TrafficDeltaCalculator _deltas = new();
+    private readonly HistoryStore? _store;
+    private readonly TrafficHistory _history;
     private readonly DispatcherTimer _timer;
     private readonly Dictionary<string, ConnectionRow> _connectionsById = new();
     private readonly Dictionary<int, ProgramRow> _programsById = new();
 
     private DateTime _lastSnapshotUtc = DateTime.UtcNow;
+    private DateTime _lastPruneUtc = DateTime.MinValue;
     private bool _refreshing;
     private string _filter = string.Empty;
     private string _trafficStatus = string.Empty;
+    private string _namesStatus = string.Empty;
     private string _summary = string.Empty;
     private bool _trafficAvailable;
-    private bool _showExitedPrograms = true;
 
     public MainViewModel()
     {
+        _settings = AppSettings.Load();
+        _names.ReverseLookupEnabled = _settings.ReverseDnsLookups;
+
+        try
+        {
+            _store = new HistoryStore(HistoryStore.DefaultPath);
+        }
+        catch (Exception ex)
+        {
+            // Still useful without saved history: charts just cover this session.
+            _namesStatus = "History won't be saved: " + ex.Message;
+        }
+
+        _history = new TrafficHistory(
+            _store,
+            pid => ProgramRow.MakeKey(_resolver.Resolve(pid)),
+            (ip, pid) => _names.GetName(ip, pid) ?? ip.ToString());
+
+        HistoryPanel = new HistoryPanelViewModel(_history, _names, _settings);
+
         Connections = new ObservableCollection<ConnectionRow>();
         Programs = new ObservableCollection<ProgramRow>();
 
@@ -39,15 +70,18 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         ProgramsView = ConfigureView(Programs, o =>
         {
             var row = (ProgramRow)o;
-            return (_showExitedPrograms || row.IsRunning) && row.Matches(_filter);
+            return (_settings.ShowExitedPrograms || row.IsRunning) && row.Matches(_filter);
         }, nameof(ProgramRow.IsRunning));
 
-        _monitor = new EtwTrafficMonitor(_aggregator);
-        _monitor.Faulted += ex => System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+        _trafficMonitor = new EtwTrafficMonitor(_aggregator);
+        _trafficMonitor.Faulted += ex => OnUiThread(() =>
         {
             TrafficAvailable = false;
             TrafficStatus = "Traffic monitoring stopped: " + ex.Message;
         });
+
+        _dnsMonitor = new EtwDnsMonitor(_names);
+        _dnsMonitor.Faulted += ex => OnUiThread(() => NamesStatus = "Website names stopped: " + ex.Message);
 
         _timer = new DispatcherTimer { Interval = RefreshInterval };
         _timer.Tick += async (_, _) => await RefreshAsync();
@@ -57,6 +91,14 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public ObservableCollection<ProgramRow> Programs { get; }
     public ICollectionView ConnectionsView { get; }
     public ICollectionView ProgramsView { get; }
+    public HistoryPanelViewModel HistoryPanel { get; }
+
+    public IReadOnlyList<AddressDisplayOption> AddressDisplayOptions { get; } =
+    [
+        new(AddressDisplay.Names, "Website names"),
+        new(AddressDisplay.Addresses, "IP addresses"),
+        new(AddressDisplay.Both, "Names and IP addresses"),
+    ];
 
     public string Filter
     {
@@ -67,19 +109,60 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             {
                 ConnectionsView.Refresh();
                 ProgramsView.Refresh();
+                HistoryPanel.Filter = _filter;
             }
+        }
+    }
+
+    public AddressDisplay AddressDisplay
+    {
+        get => _settings.AddressDisplay;
+        set
+        {
+            if (_settings.AddressDisplay == value)
+            {
+                return;
+            }
+
+            _settings.AddressDisplay = value;
+            _settings.Save();
+            OnPropertyChanged();
+            HistoryPanel.Display = value;
+            UpdateRemoteNames();
+        }
+    }
+
+    public bool ReverseDnsLookups
+    {
+        get => _settings.ReverseDnsLookups;
+        set
+        {
+            if (_settings.ReverseDnsLookups == value)
+            {
+                return;
+            }
+
+            _settings.ReverseDnsLookups = value;
+            _names.ReverseLookupEnabled = value;
+            _settings.Save();
+            OnPropertyChanged();
         }
     }
 
     public bool ShowExitedPrograms
     {
-        get => _showExitedPrograms;
+        get => _settings.ShowExitedPrograms;
         set
         {
-            if (SetField(ref _showExitedPrograms, value))
+            if (_settings.ShowExitedPrograms == value)
             {
-                ProgramsView.Refresh();
+                return;
             }
+
+            _settings.ShowExitedPrograms = value;
+            _settings.Save();
+            OnPropertyChanged();
+            ProgramsView.Refresh();
         }
     }
 
@@ -95,6 +178,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         private set => SetField(ref _trafficStatus, value);
     }
 
+    public string NamesStatus
+    {
+        get => _namesStatus;
+        private set => SetField(ref _namesStatus, value);
+    }
+
     public string Summary
     {
         get => _summary;
@@ -105,7 +194,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         try
         {
-            _monitor.Start();
+            _trafficMonitor.Start();
             TrafficAvailable = true;
             TrafficStatus = "Measuring traffic";
         }
@@ -117,10 +206,20 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 : "Traffic unavailable: run TattleTail as administrator";
         }
 
+        try
+        {
+            _dnsMonitor.Start();
+        }
+        catch (Exception ex)
+        {
+            NamesStatus = "Website names from DNS unavailable: " + ex.Message;
+        }
+
         _ = RefreshAsync();
         _timer.Start();
     }
 
+    /// <summary>Sets the live totals back to zero. Saved history is kept.</summary>
     public void ResetCounters()
     {
         _aggregator.Reset();
@@ -134,12 +233,19 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             row.UpdateTraffic(default, 0);
         }
 
-        // Programs that only existed in the history disappear with it.
+        // Programs that only existed in the totals disappear with them.
         foreach (var row in Programs.Where(p => !p.IsRunning).ToList())
         {
             Programs.Remove(row);
             _programsById.Remove(row.ProcessId);
         }
+    }
+
+    /// <summary>Deletes all saved history (charts and server lists).</summary>
+    public void ClearHistory()
+    {
+        _history.Clear();
+        HistoryPanel.RequestRefresh();
     }
 
     private async Task RefreshAsync()
@@ -159,9 +265,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
             UpdateConnections(connections, snapshot, elapsed);
             UpdatePrograms(connections, snapshot, elapsed);
+            UpdateRemoteNames();
             UpdateSummary();
 
+            _history.Add(_deltas.Next(snapshot.ByRemote));
             _aggregator.PruneConnections(ConnectionTrafficRetention);
+            PruneHistoryIfDue();
         }
         catch (Exception ex)
         {
@@ -171,6 +280,21 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             _refreshing = false;
         }
+
+        await HistoryPanel.TickAsync();
+    }
+
+    private void PruneHistoryIfDue()
+    {
+        var now = DateTime.UtcNow;
+        if (now - _lastPruneUtc < PruneInterval)
+        {
+            return;
+        }
+
+        _lastPruneUtc = now;
+        var retention = TimeSpan.FromDays(Math.Max(1, _settings.HistoryRetentionDays));
+        _ = Task.Run(() => _history.Prune(retention));
     }
 
     private void UpdateConnections(List<ConnectionInfo> connections, TrafficSnapshot snapshot, double elapsed)
@@ -207,6 +331,24 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    private void UpdateRemoteNames()
+    {
+        foreach (var row in Connections)
+        {
+            row.UpdateRemote(LookupName(row.RemoteIp, row.ProcessId), _settings.AddressDisplay);
+        }
+    }
+
+    private string? LookupName(IPAddress? ip, int processId)
+    {
+        if (ip is null || ip.Equals(IPAddress.Any) || ip.Equals(IPAddress.IPv6Any))
+        {
+            return null;
+        }
+
+        return _names.GetName(ip, processId);
+    }
+
     private void UpdatePrograms(List<ConnectionInfo> connections, TrafficSnapshot snapshot, double elapsed)
     {
         var connectionCounts = connections.GroupBy(c => c.ProcessId).ToDictionary(g => g.Key, g => g.Count());
@@ -236,7 +378,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         foreach (var gone in _programsById.Keys.Where(pid => !pids.Contains(pid)).ToList())
         {
-            Programs.Remove(_programsById[gone]);
+            var row = _programsById[gone];
+            if (HistoryPanel.SelectedProgram == row)
+            {
+                HistoryPanel.SelectedProgram = null;
+            }
+
+            Programs.Remove(row);
             _programsById.Remove(gone);
         }
 
@@ -280,9 +428,24 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         return view;
     }
 
+    private static void OnUiThread(Action action) =>
+        System.Windows.Application.Current?.Dispatcher.BeginInvoke(action);
+
     public void Dispose()
     {
         _timer.Stop();
-        _monitor.Dispose();
+        _trafficMonitor.Dispose();
+        _dnsMonitor.Dispose();
+
+        try
+        {
+            _history.Flush();
+        }
+        catch
+        {
+            // Losing the last partial minute on exit is acceptable.
+        }
+
+        _store?.Dispose();
     }
 }

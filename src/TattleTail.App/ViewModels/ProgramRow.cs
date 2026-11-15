@@ -13,8 +13,16 @@ public sealed class ProgramRow : TrafficRowBase
         ProcessId = process.ProcessId;
         ProcessName = process.Name;
         ProcessPath = process.Path;
+        ProgramKey = MakeKey(process);
     }
 
+    /// <summary>
+    /// The identity used for history: the executable path, so a program keeps its history
+    /// across restarts even though its process id changes.
+    /// </summary>
+    public static string MakeKey(ProcessDetails process) => process.Path ?? process.Name;
+
+    public string ProgramKey { get; }
     public int ProcessId { get; }
     public string ProcessName { get; }
     public string? ProcessPath { get; }

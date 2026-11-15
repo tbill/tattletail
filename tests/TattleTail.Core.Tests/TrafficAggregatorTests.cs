@@ -76,9 +76,22 @@ public class TrafficAggregatorTests
         var removed = aggregator.PruneConnections(TimeSpan.FromMinutes(10));
 
         var snapshot = aggregator.Snapshot();
-        Assert.Equal(1, removed);
+        Assert.Equal(2, removed); // one connection counter and one remote-address counter
         Assert.Single(snapshot.ByConnection);
+        Assert.Single(snapshot.ByRemote);
         Assert.Equal(105, snapshot.ByProcess[1].Sent);
+    }
+
+    [Fact]
+    public void ByRemote_IncludesUdpPeers()
+    {
+        var aggregator = new TrafficAggregator();
+        var quicServer = IPEndPoint.Parse("142.250.80.46:443");
+        aggregator.Record(Protocol.Udp, 9, IPEndPoint.Parse("0.0.0.0:60000"), quicServer, 1200, Direction.Received);
+        aggregator.Record(Protocol.Tcp, 9, Local, new IPEndPoint(quicServer.Address.MapToIPv6(), 443), 300, Direction.Sent);
+
+        var counter = aggregator.Snapshot().ByRemote[new RemoteKey(9, quicServer.Address)];
+        Assert.Equal(new TrafficCounter(300, 1200), counter);
     }
 
     [Fact]

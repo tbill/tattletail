@@ -34,3 +34,30 @@ jobs:
         with:
           name: TattleTail-win-x64
           path: publish/TattleTail.exe
+
+      # Launch the real app on the Windows runner, make some web requests while it watches,
+      # and check it saw connections, traffic, website names and history.
+      - name: Smoke test
+        run: |
+          $report = Join-Path $PWD 'smoke.json'
+          $app = Start-Process publish/TattleTail.exe -ArgumentList '--smoke-test', "`"$report`"", '25' -PassThru
+          Start-Sleep -Seconds 6
+          foreach ($url in 'https://github.com', 'https://www.microsoft.com', 'https://www.wikipedia.org', 'https://api.nuget.org/v3/index.json') {
+            try { Invoke-WebRequest $url -UseBasicParsing -TimeoutSec 15 | Out-Null } catch { Write-Host "request to $url failed: $_" }
+          }
+          if (-not $app.WaitForExit(120000)) { $app.Kill(); throw 'TattleTail did not finish the smoke test in time' }
+          if (-not (Test-Path $report)) { throw "No smoke test report (exit code $($app.ExitCode))" }
+          Get-Content $report
+          $result = Get-Content $report -Raw | ConvertFrom-Json
+          if (-not $result.ok) { throw 'Smoke test failed: see report above' }
+          if ($result.totalBytes -le 0) { throw 'No traffic was measured' }
+          if ($result.servers -le 0) { throw 'No servers were recorded in history' }
+          if ($result.namedConnections -le 0) { Write-Warning 'No connections had website names' }
+
+      - name: Upload smoke test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-test-report
+          path: smoke.json
+          if-no-files-found: ignore
