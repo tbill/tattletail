@@ -65,6 +65,10 @@ internal static class SmokeTest
                 programsWithTraffic = viewModel.Programs.Count(p => p.TotalBytes > 0),
                 totalBytes = viewModel.Programs.Sum(p => p.TotalBytes),
                 servers = viewModel.HistoryPanel.Servers.Count,
+                groupedByDomain = viewModel.HistoryPanel.GroupByDomain,
+                domainHosts = viewModel.HistoryPanel.Servers
+                    .Where(s => s.IsDomain).OrderByDescending(s => s.TotalBytes).Take(5)
+                    .Select(s => $"{s.Server}: {string.Join(", ", s.Children.Select(c => c.Server))}"),
                 topServers = viewModel.HistoryPanel.Servers
                     .OrderByDescending(s => s.TotalBytes).Take(10)
                     .Select(s => $"{s.Server} ({ByteFormatter.Format(s.TotalBytes)}, {s.Programs})"),
