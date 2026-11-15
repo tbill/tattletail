@@ -59,6 +59,7 @@ internal static class SmokeTest
             var report = new
             {
                 ok = viewModel.Connections.Count > 0 && viewModel.TrafficAvailable,
+                version = AppVersion.Display,
                 connections = viewModel.Connections.Count,
                 namedConnections,
                 programs = viewModel.Programs.Count,

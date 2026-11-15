@@ -16,6 +16,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        Title = $"TattleTail {AppVersion.Display}";
         DataContext = _viewModel;
 
         SetUpChart();
