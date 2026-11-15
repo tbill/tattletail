@@ -18,7 +18,7 @@ public readonly record struct TrafficKey(Protocol Protocol, int ProcessId, strin
     {
         if (protocol == Protocol.Udp)
         {
-            var family = Normalize(local.Address).AddressFamily == AddressFamily.InterNetworkV6 ? "v6" : "v4";
+            var family = IpAddresses.Normalize(local.Address).AddressFamily == AddressFamily.InterNetworkV6 ? "v6" : "v4";
             return new TrafficKey(protocol, processId, $"{family}:{local.Port}", string.Empty);
         }
 
@@ -26,21 +26,5 @@ public readonly record struct TrafficKey(Protocol Protocol, int ProcessId, strin
     }
 
     private static string Describe(IPEndPoint endpoint) =>
-        new IPEndPoint(Normalize(endpoint.Address), endpoint.Port).ToString();
-
-    private static IPAddress Normalize(IPAddress address)
-    {
-        if (address.IsIPv4MappedToIPv6)
-        {
-            return address.MapToIPv4();
-        }
-
-        // Drop the IPv6 scope id ("%12"); ETW and the IP helper table disagree on it.
-        if (address.AddressFamily == AddressFamily.InterNetworkV6 && address.ScopeId != 0)
-        {
-            return new IPAddress(address.GetAddressBytes());
-        }
-
-        return address;
-    }
+        new IPEndPoint(IpAddresses.Normalize(endpoint.Address), endpoint.Port).ToString();
 }
