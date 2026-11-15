@@ -1,0 +1,62 @@
+name: Refresh public suffix list
+
+# Once a month, fetch the latest Public Suffix List (used for "Group by domain").
+# If it changed and all tests still pass, commit it to main.
+on:
+  schedule:
+    - cron: '17 6 1 * *'   # 06:17 UTC on the 1st of each month
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-suffix-list
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download latest list
+        run: |
+          curl -fsSL --retry 3 -o new.dat https://publicsuffix.org/list/public_suffix_list.dat
+          # Sanity checks: it must be the real list, not an error page or a truncated file.
+          grep -q '===BEGIN ICANN DOMAINS===' new.dat
+          grep -q '===END ICANN DOMAINS===' new.dat
+          grep -q '===BEGIN PRIVATE DOMAINS===' new.dat
+          lines=$(wc -l < new.dat)
+          if [ "$lines" -lt 10000 ]; then echo "Only $lines lines; refusing to use it"; exit 1; fi
+          mv new.dat src/TattleTail.Core/Names/Data/public_suffix_list.dat
+
+      - name: Check for changes
+        id: diff
+        run: |
+          if git diff --quiet; then
+            echo "The list is already up to date."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            git diff --stat
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-dotnet@v4
+        if: steps.diff.outputs.changed == 'true'
+        with:
+          dotnet-version: 8.0.x
+
+      # The core tests run on Linux; they include the domain-grouping tests.
+      - name: Test with the new list
+        if: steps.diff.outputs.changed == 'true'
+        run: dotnet test tests/TattleTail.Core.Tests -c Release
+
+      - name: Commit
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/TattleTail.Core/Names/Data/public_suffix_list.dat
+          git commit -m "Update public suffix list ($(date -u +%Y-%m-%d))"
+          git push
