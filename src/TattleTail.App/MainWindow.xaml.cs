@@ -12,6 +12,9 @@ public partial class MainWindow : Window
     private static readonly Color DownloadColor = Color.FromHex("#1A73E8");
 
     private readonly MainViewModel _viewModel = new();
+    private readonly TrayIcon _tray = new();
+    private bool _exiting;
+    private bool _cleanedUp;
 
     public MainWindow()
     {
@@ -22,15 +25,103 @@ public partial class MainWindow : Window
         SetUpChart();
         _viewModel.HistoryPanel.PointsChanged += DrawChart;
 
-        Loaded += (_, _) =>
+        _tray.OpenRequested += ShowFromTray;
+        _tray.ExitRequested += ExitApp;
+        _viewModel.NewProgramsDetected += OnNewProgramsDetected;
+        _viewModel.PropertyChanged += (_, e) =>
         {
-            _viewModel.Start();
-            if (SmokeTest.FromCommandLine() is { } smoke)
+            if (e.PropertyName == nameof(MainViewModel.TrayText))
             {
-                SmokeTest.Run(this, _viewModel, smoke.ReportPath, smoke.Seconds);
+                _tray.SetTooltip(_viewModel.TrayText);
             }
         };
-        Closed += (_, _) => _viewModel.Dispose();
+
+        Closing += OnClosing;
+        Closed += (_, _) => CleanUp();
+    }
+
+    /// <summary>Removes the tray icon and saves history. Safe to call more than once.</summary>
+    public void CleanUp()
+    {
+        if (_cleanedUp)
+        {
+            return;
+        }
+
+        _cleanedUp = true;
+        _tray.Dispose();
+        _viewModel.Dispose();
+    }
+
+    public bool TrayIconVisible => _tray.Visible;
+
+    /// <summary>
+    /// Starts watching the network. Separate from showing the window, because when TattleTail
+    /// starts in the background the window isn't shown at all.
+    /// </summary>
+    public void StartMonitoring()
+    {
+        _viewModel.Start();
+        if (SmokeTest.FromCommandLine() is { } smoke)
+        {
+            SmokeTest.Run(this, _viewModel, smoke.ReportPath, smoke.Seconds);
+        }
+    }
+
+    /// <summary>Brings the window back from the tray (or from behind other windows).</summary>
+    public void ShowFromTray()
+    {
+        Show();
+        if (WindowState == WindowState.Minimized)
+        {
+            WindowState = WindowState.Normal;
+        }
+
+        Activate();
+    }
+
+    /// <summary>Really quits, whatever the "keep running in the tray" setting says.</summary>
+    public void ExitApp()
+    {
+        _exiting = true;
+        Close();
+
+        // A window that was never shown (background start) doesn't end the app by closing.
+        Application.Current?.Shutdown();
+    }
+
+    /// <summary>Makes the next close a real one (used when Windows is signing out or shutting down).</summary>
+    public void PrepareToExit() => _exiting = true;
+
+    private void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
+    {
+        if (_exiting || !_viewModel.KeepRunningInTray)
+        {
+            return;
+        }
+
+        // Keep counting in the background; the tray icon brings the window back.
+        e.Cancel = true;
+        Hide();
+        if (_viewModel.TakeTrayHint())
+        {
+            _tray.ShowMessage("TattleTail is still running",
+                "It keeps recording traffic history here in the tray. Right-click the icon and choose Exit to quit.");
+        }
+    }
+
+    private void OnNewProgramsDetected(IReadOnlyList<string> names)
+    {
+        const int maxListed = 4;
+        var listed = string.Join(", ", names.Take(maxListed)) + (names.Count > maxListed ? $" and {names.Count - maxListed} more" : string.Empty);
+        if (names.Count == 1)
+        {
+            _tray.ShowMessage("New program on the network", $"{listed} is using the network for the first time.");
+        }
+        else
+        {
+            _tray.ShowMessage("New programs on the network", $"Using the network for the first time: {listed}.");
+        }
     }
 
     private void SetUpChart()

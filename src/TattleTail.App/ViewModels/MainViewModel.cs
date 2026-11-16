@@ -28,6 +28,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private readonly TrafficDeltaCalculator _deltas = new();
     private readonly HistoryStore? _store;
     private readonly TrafficHistory _history;
+    private readonly NewProgramDetector _newPrograms;
     private readonly DispatcherTimer _timer;
     private readonly Dictionary<string, ConnectionRow> _connectionsById = new();
     private readonly Dictionary<ProcessInstance, ProgramRow> _programsById = new();
@@ -40,6 +41,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private string _namesStatus = string.Empty;
     private string _historyStatus = string.Empty;
     private string? _historyUnavailable;
+    private string _trayText = "TattleTail";
+    private bool _startWithWindows;
+    private bool _startWithWindowsReady;
     private string _summary = string.Empty;
     private bool _trafficAvailable;
 
@@ -64,6 +68,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             process => ProgramRow.MakeKey(_processes.GetDetails(process)),
             (ip, process) => _names.GetName(ip, _processes.GetDetails(process).ProcessId) ?? ip.ToString(),
             saveInBackground: true);
+
+        _newPrograms = new NewProgramDetector(LoadKnownPrograms());
 
         HistoryPanel = new HistoryPanelViewModel(_history, _names, _settings);
 
@@ -200,6 +206,122 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         private set => SetField(ref _summary, value);
     }
 
+    /// <summary>Raised with the display names of programs that just used the network for the first time.</summary>
+    public event Action<IReadOnlyList<string>>? NewProgramsDetected;
+
+    /// <summary>Text for the tray icon's tooltip: the app name and current speeds.</summary>
+    public string TrayText
+    {
+        get => _trayText;
+        private set => SetField(ref _trayText, value);
+    }
+
+    /// <summary>Start TattleTail (hidden in the tray) when the user signs in to Windows.</summary>
+    public bool StartWithWindows
+    {
+        get => _startWithWindows;
+        set
+        {
+            if (_startWithWindows != value && _startWithWindowsReady)
+            {
+                _ = SetStartWithWindowsAsync(value);
+            }
+        }
+    }
+
+    /// <summary>False while Windows is being asked about, or told to change, the sign-in task.</summary>
+    public bool StartWithWindowsReady
+    {
+        get => _startWithWindowsReady;
+        private set => SetField(ref _startWithWindowsReady, value);
+    }
+
+    public bool KeepRunningInTray
+    {
+        get => _settings.KeepRunningInTray;
+        set
+        {
+            if (_settings.KeepRunningInTray != value)
+            {
+                _settings.KeepRunningInTray = value;
+                _settings.Save();
+                OnPropertyChanged();
+            }
+        }
+    }
+
+    public bool AlertOnNewPrograms
+    {
+        get => _settings.AlertOnNewPrograms;
+        set
+        {
+            if (_settings.AlertOnNewPrograms != value)
+            {
+                _settings.AlertOnNewPrograms = value;
+                _settings.Save();
+                OnPropertyChanged();
+            }
+        }
+    }
+
+    /// <summary>True the first time it is asked, ever: whether to explain that closing only hides the window.</summary>
+    public bool TakeTrayHint()
+    {
+        if (_settings.TrayHintShown)
+        {
+            return false;
+        }
+
+        _settings.TrayHintShown = true;
+        _settings.Save();
+        return true;
+    }
+
+    private async Task SetStartWithWindowsAsync(bool enable)
+    {
+        StartWithWindowsReady = false;
+        try
+        {
+            await Task.Run(enable ? AutoStart.Enable : AutoStart.Disable);
+            _startWithWindows = enable;
+        }
+        catch (Exception ex)
+        {
+            NamesStatus = "Could not change Start with Windows: " + ex.Message;
+        }
+
+        // Either the new value, or (after a failure) back to the old one.
+        OnPropertyChanged(nameof(StartWithWindows));
+        StartWithWindowsReady = true;
+    }
+
+    private async Task LoadStartWithWindowsAsync()
+    {
+        try
+        {
+            _startWithWindows = await Task.Run(AutoStart.IsEnabled);
+        }
+        catch
+        {
+            // Task Scheduler didn't answer; show it as off and let the user try the switch.
+        }
+
+        OnPropertyChanged(nameof(StartWithWindows));
+        StartWithWindowsReady = true;
+    }
+
+    private List<string> LoadKnownPrograms()
+    {
+        try
+        {
+            return _store?.GetKnownPrograms() ?? [];
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
     public void Start()
     {
         try
@@ -226,6 +348,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
 
         _ = RefreshAsync();
+        _ = LoadStartWithWindowsAsync();
         _timer.Start();
     }
 
@@ -258,6 +381,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             // Off the UI thread: deleting waits its turn behind any history read in progress.
             await Task.Run(_history.Clear);
+            _newPrograms.Forget();
         }
         catch (Exception ex)
         {
@@ -312,7 +436,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
             try
             {
-                _history.Add(_deltas.Next(snapshot.ByRemote));
+                var deltas = _deltas.Next(snapshot.ByRemote);
+                _history.Add(deltas);
+                CheckForNewPrograms(deltas);
                 _aggregator.PruneConnections(ConnectionTrafficRetention);
                 PruneHistoryIfDue();
                 UpdateHistoryStatus();
@@ -328,6 +454,55 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
 
         await HistoryPanel.TickAsync();
+    }
+
+    /// <summary>Notes, and if wanted announces, programs using the network for the first time.</summary>
+    private void CheckForNewPrograms(List<TrafficDelta> deltas)
+    {
+        // Talking to yourself (localhost) or shouting into the room (broadcast, multicast) isn't
+        // "using the network" in the sense people care about here.
+        var programs = deltas
+            .Where(d => IpAddresses.SpecialName(d.Remote) is null)
+            .Select(d => d.Process)
+            .Distinct()
+            .Select(_processes.GetDetails)
+            .Where(d => d.Name != ProcessRegistry.UnknownName)
+            .Select(d => (Key: ProgramRow.MakeKey(d), d.Name))
+            .ToList();
+        if (programs.Count == 0)
+        {
+            return;
+        }
+
+        var result = _newPrograms.Observe(programs.Select(p => p.Key));
+        if (result.Added.Count == 0)
+        {
+            return;
+        }
+
+        if (_store is { } store)
+        {
+            var minute = (long)(DateTime.UtcNow - DateTime.UnixEpoch).TotalMinutes;
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    store.AddKnownPrograms(result.Added, minute);
+                }
+                catch
+                {
+                    // Worst case the program is announced again after a restart.
+                }
+            });
+        }
+
+        if (result.Announce && _settings.AlertOnNewPrograms)
+        {
+            var added = new HashSet<string>(result.Added, StringComparer.OrdinalIgnoreCase);
+            var names = programs.Where(p => added.Contains(p.Key)).Select(p => p.Name)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            NewProgramsDetected?.Invoke(names);
+        }
     }
 
     private void UpdateHistoryStatus()
@@ -473,6 +648,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
 
         Summary = text;
+        TrayText = TrafficAvailable
+            ? $"TattleTail\n↑ {ByteFormatter.Format(Programs.Sum(p => p.SendRate))}/s   ↓ {ByteFormatter.Format(Programs.Sum(p => p.ReceiveRate))}/s"
+            : "TattleTail";
     }
 
     private static ICollectionView ConfigureView<T>(ObservableCollection<T> source, Predicate<object> filter,

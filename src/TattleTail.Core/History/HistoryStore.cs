@@ -52,6 +52,10 @@ public sealed class HistoryStore : IHistoryStore, IDisposable
                 PRIMARY KEY (minute, program, ip)
             ) WITHOUT ROWID;
             CREATE INDEX IF NOT EXISTS ix_traffic_program_minute ON traffic (program, minute);
+            CREATE TABLE IF NOT EXISTS known_programs (
+                program      TEXT    NOT NULL PRIMARY KEY,
+                first_minute INTEGER NOT NULL
+            ) WITHOUT ROWID;
             """);
     }
 
@@ -189,7 +193,56 @@ public sealed class HistoryStore : IHistoryStore, IDisposable
     {
         lock (_gate)
         {
-            Execute("DELETE FROM traffic;");
+            Execute("DELETE FROM traffic; DELETE FROM known_programs;");
+        }
+    }
+
+    /// <summary>
+    /// Every program that has used the network before: the ones noted by
+    /// <see cref="AddKnownPrograms"/> plus any that appear in saved history.
+    /// </summary>
+    public List<string> GetKnownPrograms()
+    {
+        lock (_gate)
+        {
+            using var command = _connection.CreateCommand();
+            command.CommandText = "SELECT program FROM known_programs UNION SELECT DISTINCT program FROM traffic;";
+
+            var result = new List<string>();
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                result.Add(reader.GetString(0));
+            }
+
+            return result;
+        }
+    }
+
+    /// <summary>Remembers programs as having used the network, first at <paramref name="minute"/>.</summary>
+    public void AddKnownPrograms(IReadOnlyCollection<string> programs, long minute)
+    {
+        if (programs.Count == 0)
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            using var transaction = _connection.BeginTransaction();
+            using var command = _connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = "INSERT OR IGNORE INTO known_programs (program, first_minute) VALUES ($program, $minute);";
+            var program = command.Parameters.Add("$program", SqliteType.Text);
+            command.Parameters.AddWithValue("$minute", minute);
+
+            foreach (var name in programs)
+            {
+                program.Value = name;
+                command.ExecuteNonQuery();
+            }
+
+            transaction.Commit();
         }
     }
 

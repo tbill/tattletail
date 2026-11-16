@@ -24,4 +24,3 @@ Windows network monitor (C# / .NET 8 / WPF). See README.md for features and layo
 ## Feature queue (agreed with the owner, not started)
 - Country / world map for remote servers
 - Show whether each program is digitally signed, and by whom
-- System-tray icon with an alert when a new program connects

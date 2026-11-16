@@ -4,6 +4,8 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
+    <!-- Only for the system-tray icon (NotifyIcon), which WPF doesn't have. -->
+    <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>TattleTail</AssemblyName>
@@ -21,6 +23,13 @@
          which runs fine on .NET 8; NU1701 just notes that. -->
     <NoWarn>$(NoWarn);NU1701</NoWarn>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Windows Forms brings its own Application, MessageBox, Color... which would clash with
+         WPF's. The one file that needs them (TrayIcon.cs) asks for them by name. -->
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\TattleTail.Core\TattleTail.Core.csproj" />

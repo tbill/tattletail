@@ -29,6 +29,12 @@ history charts going back 30 days.
   program that runs for a split second is listed by name.
   Untick **Show exited programs** to hide them.
 - **Reset counters** sets every total back to zero.
+- **Runs in the background:** closing the window hides TattleTail in the system tray (next to
+  the clock), where it keeps recording. Hover the tray icon for current speeds, click it to
+  bring the window back, or right-click it and choose **Exit** to quit.
+- **Start with Windows:** tick it under **Options** and TattleTail starts hidden in the tray
+  every time you sign in, so history has no gaps.
+- **New-program alerts:** a notification pops up the first time a program uses the network.
 
 ## Download
 
@@ -74,11 +80,28 @@ is used, so hosting services group together: every `*.cloudfront.net` server sho
 `cloudfront.net` instead of as hundreds of separate domains. A GitHub Action refreshes the list on the 1st of
 every month and commits the update only if all tests still pass.
 
+## Running in the background
+
+All three switches are under **Options** in the toolbar.
+
+- **Start with Windows (in the tray).** TattleTail needs administrator rights, and Windows
+  won't start such a program at sign-in without asking every time. So TattleTail creates a
+  scheduled task named `TattleTail` (visible in Windows' Task Scheduler) that is allowed to
+  start it without the prompt. Unticking the option deletes the task. If you move
+  `TattleTail.exe`, the task is re-pointed the next time you run it.
+- **Keep running in the tray when the window is closed.** Untick it if you'd rather the close
+  button quit.
+- **Alert when a new program uses the network.** TattleTail remembers every program it has seen
+  send or receive anything. The first time ever, it spends five minutes just learning what's
+  normal, without alerts. Traffic that stays on your own PC (localhost) doesn't count.
+  An updated program that installs to a new folder counts as new.
+
 ## Where history is kept
 
 Traffic history is saved once a minute to `%LOCALAPPDATA%\TattleTail\history.db` (a SQLite
-file) and kept for 30 days. Settings are in `settings.json` in the same folder. Nothing is
-ever sent anywhere. **Clear history…** deletes it all.
+file) and kept for 30 days, along with the list of programs already seen on the network.
+Settings are in `settings.json` in the same folder. Nothing is ever sent anywhere.
+**Clear history…** deletes it all.
 
 ## How it works
 
@@ -148,14 +171,15 @@ within about 3 minutes. Inside the app, the window title and the file's
 ## Testing on Windows
 
 Besides the unit tests, CI launches the real app on a Windows machine with
-`TattleTail.exe --smoke-test report.json 25`, makes a few web requests while it runs, and
-checks the report shows connections, traffic, website names and history.
+`TattleTail.exe --smoke-test report.json 35 --background`, makes a few web requests while it
+runs, and checks the report shows connections, traffic, website names and history. It also
+checks that the app started hidden with a tray icon, that starting a second copy brought the
+window back, and that Windows accepts the sign-in task.
 
 ## Ideas for later
 
 - Country and a world map for remote servers
 - Show whether each program is digitally signed, and by whom
-- System-tray icon with an alert when a new program connects
 - Export to CSV
 
 ## License
