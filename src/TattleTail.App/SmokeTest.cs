@@ -77,6 +77,9 @@ internal static class SmokeTest
                 programsWithTraffic = viewModel.Programs.Count(p => p.TotalBytes > 0),
                 programsExited = viewModel.Programs.Count(p => !p.IsRunning),
                 programsUnnamed = viewModel.Programs.Count(p => p.ProcessName == ProcessRegistry.UnknownName),
+                serviceHosts = viewModel.Programs
+                    .Where(p => p.ProcessName.StartsWith(ProgramIdentity.ServiceHostName, StringComparison.OrdinalIgnoreCase))
+                    .Select(p => p.ProcessName).Distinct().Order(),
                 exitedProgramNames = viewModel.Programs
                     .Where(p => !p.IsRunning && p.TotalBytes > 0).Select(p => p.ProcessName).Distinct(),
                 topPrograms = viewModel.Programs

@@ -180,3 +180,96 @@ public class ProcessRegistryTests
         });
     }
 }
+
+public class ProgramIdentityTests
+{
+    private const string SvchostPath = @"C:\Windows\System32\svchost.exe";
+
+    [Fact]
+    public void OrdinaryProgram_IsIdentifiedByItsPath()
+    {
+        var chrome = new ProcessDetails(10, "chrome", @"C:\Program Files\Google\Chrome\Application\chrome.exe");
+
+        Assert.Equal(chrome.Path, ProgramIdentity.KeyFor(chrome));
+        Assert.Equal("chrome", ProgramIdentity.DisplayName(ProgramIdentity.KeyFor(chrome)));
+        Assert.Equal("chrome", chrome.DisplayName);
+    }
+
+    [Fact]
+    public void ProgramWithoutAPath_IsIdentifiedByItsName()
+    {
+        var system = new ProcessDetails(4, "System", null);
+
+        Assert.Equal("System", ProgramIdentity.KeyFor(system));
+        Assert.Equal("System", ProgramIdentity.DisplayName("System"));
+    }
+
+    [Fact]
+    public void ServiceHosts_AreToldApartByTheirServices()
+    {
+        var update = new ProcessDetails(100, "svchost", SvchostPath, "Windows Update");
+        var dns = new ProcessDetails(200, "svchost", SvchostPath, "DNS Client");
+
+        Assert.NotEqual(ProgramIdentity.KeyFor(update), ProgramIdentity.KeyFor(dns));
+        Assert.Equal("svchost (Windows Update)", update.DisplayName);
+        Assert.Equal("svchost (Windows Update)", ProgramIdentity.DisplayName(ProgramIdentity.KeyFor(update)));
+    }
+
+    [Fact]
+    public void SameServiceInANewProcess_KeepsTheSameIdentity()
+    {
+        var before = new ProcessDetails(100, "svchost", SvchostPath, "Windows Update");
+        var afterRestart = new ProcessDetails(5120, "svchost", SvchostPath, "Windows Update");
+
+        Assert.Equal(ProgramIdentity.KeyFor(before), ProgramIdentity.KeyFor(afterRestart));
+    }
+
+    [Fact]
+    public void OldHistorySavedBeforeServicesWereNamed_StillReads()
+    {
+        Assert.Equal("svchost", ProgramIdentity.DisplayName(SvchostPath));
+    }
+
+    [Fact]
+    public void ServiceLabel_IsSortedSoTheSameServicesAlwaysGiveTheSameLabel()
+    {
+        var one = ProgramIdentity.ServiceLabel(["DNS Client", "DHCP Client"]);
+        var two = ProgramIdentity.ServiceLabel(["DHCP Client", " dns client ", "DNS Client"]);
+
+        Assert.Equal("DHCP Client, DNS Client", one);
+        Assert.Equal(one, two, ignoreCase: true);
+    }
+
+    [Fact]
+    public void ServiceLabel_ShortensLongLists()
+    {
+        var label = ProgramIdentity.ServiceLabel(["E", "D", "C", "B", "A"]);
+
+        Assert.Equal("A, B, C +2 more", label);
+    }
+
+    [Fact]
+    public void ServiceLabel_IsNullWithoutServices()
+    {
+        Assert.Null(ProgramIdentity.ServiceLabel([]));
+        Assert.Null(ProgramIdentity.ServiceLabel(["  "]));
+    }
+
+    [Fact]
+    public void ServiceLabel_CannotBreakTheIdentityFormat()
+    {
+        var details = new ProcessDetails(1, "svchost", SvchostPath, ProgramIdentity.ServiceLabel(["Odd|Name"]));
+
+        Assert.Equal("svchost (Odd/Name)", ProgramIdentity.DisplayName(ProgramIdentity.KeyFor(details)));
+    }
+
+    [Theory]
+    [InlineData("svchost", true)]
+    [InlineData("SVCHOST", true)]
+    [InlineData("svchost2", false)]
+    [InlineData(null, false)]
+    public void IsServiceHost_OnlyMatchesSvchost(string? name, bool expected)
+    {
+        Assert.Equal(expected, ProgramIdentity.IsServiceHost(name));
+    }
+}

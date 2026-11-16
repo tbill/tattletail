@@ -12,7 +12,7 @@ public sealed class ProgramRow : TrafficRowBase
     {
         Process = process;
         ProcessId = details.ProcessId;
-        ProcessName = details.Name;
+        ProcessName = details.DisplayName;
         ProcessPath = details.Path;
         ProgramKey = MakeKey(details);
     }
@@ -21,10 +21,10 @@ public sealed class ProgramRow : TrafficRowBase
     public ProcessInstance Process { get; }
 
     /// <summary>
-    /// The identity used for history: the executable path, so a program keeps its history
-    /// across restarts even though its process id changes.
+    /// The identity used for history: the executable path (plus, for svchost, the services
+    /// inside), so a program keeps its history across restarts even though its process id changes.
     /// </summary>
-    public static string MakeKey(ProcessDetails process) => process.Path ?? process.Name;
+    public static string MakeKey(ProcessDetails process) => ProgramIdentity.KeyFor(process);
 
     public string ProgramKey { get; }
     public int ProcessId { get; }

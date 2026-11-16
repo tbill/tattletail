@@ -10,6 +10,9 @@ history charts going back 30 days.
 
 - **Programs tab:** one row per program, with its open connections, current upload and
   download speed, and total bytes sent and received since TattleTail started.
+- **Names the Windows service inside `svchost.exe`:** much of Windows' own traffic comes from a
+  generic host program called svchost. TattleTail shows which service is inside, such as
+  **svchost (Windows Update)** or **svchost (DNS Client)**, and keeps separate history for each.
 - **Traffic history chart:** under the Programs table. Uploads are drawn above the line and
   downloads below it. Pick a range from the last 10 minutes (second by second) to the last
   30 days. Click a program to chart just that program; hover the chart to read exact numbers.
@@ -103,6 +106,14 @@ file) and kept for 30 days, along with the list of programs already seen on the 
 Settings are in `settings.json` in the same folder. Nothing is ever sent anywhere.
 **Clear history…** deletes it all.
 
+## Programs and services
+
+A program is identified by the full path of its `.exe`, so it keeps its history when it
+restarts. Every `svchost.exe` has the same path, so for those the services inside are part of
+the identity: Windows Update and the DNS client each get their own chart, server list and
+new-program alert. When several services share one svchost, up to three are listed, then
+"+2 more". History saved by older versions stays under plain **svchost**.
+
 ## How it works
 
 | Piece | What it does |
@@ -110,6 +121,7 @@ Settings are in `settings.json` in the same folder. Nothing is ever sent anywher
 | `ConnectionTable` | Calls `GetExtendedTcpTable` / `GetExtendedUdpTable` (IP Helper API) to list sockets and their owning process IDs. |
 | `EtwTrafficMonitor` | Starts a real-time kernel ETW session (`NetworkTCPIP` keyword) using [TraceEvent](https://www.nuget.org/packages/Microsoft.Diagnostics.Tracing.TraceEvent) and receives an event for every TCP/UDP send and receive. |
 | `ProcessRegistry` | Knows which program owns each process ID right now. Windows reuses process IDs, so the kernel's process start/stop events (same ETW session) are used to keep a new program from inheriting an old one's name and totals. |
+| `ServiceTable` | Asks the Service Control Manager (`EnumServicesStatusEx`) which services run in which process, to label each `svchost.exe`. |
 | `TrafficAggregator` | Thread-safe running totals per connection, per process, and per process + remote address. |
 | `EtwDnsMonitor` / `HostNameCache` | Listens to `Microsoft-Windows-DNS-Client` event 3008 (query completed) to map addresses to names, with reverse DNS as a fallback. |
 | `TrafficHistory` / `HistoryStore` | Keeps the last 10 minutes per second in memory and writes per-minute, per-program, per-server rows to SQLite on a background thread. A minute that can't be saved is kept and retried. |

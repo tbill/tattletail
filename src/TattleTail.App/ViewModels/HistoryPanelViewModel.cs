@@ -350,6 +350,5 @@ public sealed class HistoryPanelViewModel : ObservableObject
         return _names.GetName(ip) ?? row.Ip;
     }
 
-    private static string DisplayName(string programKey) =>
-        programKey.Contains('\\') ? Path.GetFileNameWithoutExtension(programKey) : programKey;
+    private static string DisplayName(string programKey) => ProgramIdentity.DisplayName(programKey);
 }

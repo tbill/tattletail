@@ -73,6 +73,7 @@ jobs:
           if (-not $result.trayIconVisible) { throw 'No tray icon' }
           if ($result.autoStart -ne 'ok') { throw "Start with Windows: $($result.autoStart)" }
           if ($result.historyText -like 'Could not*') { throw "History panel: $($result.historyText)" }
+          if (-not ($result.serviceHosts -like 'svchost (*')) { throw 'No svchost row names the Windows service inside it' }
           if ($result.historyStatus) { throw "History problem: $($result.historyStatus)" }
           if ($result.exitedProgramNames -notcontains 'curl') { throw 'The short-lived curl runs were not listed by name as exited programs' }
           if ($result.namedConnections -le 0) { Write-Warning 'No connections had website names' }
