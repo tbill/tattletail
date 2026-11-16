@@ -19,18 +19,18 @@ public readonly record struct TrafficCounter(long Sent, long Received)
 }
 
 /// <summary>Identifies "this program talking to that server address".</summary>
-public readonly record struct RemoteKey(int ProcessId, IPAddress Address);
+public readonly record struct RemoteKey(ProcessInstance Process, IPAddress Address);
 
 /// <summary>A point-in-time copy of everything the aggregator has counted.</summary>
 public sealed record TrafficSnapshot(
     IReadOnlyDictionary<TrafficKey, TrafficCounter> ByConnection,
-    IReadOnlyDictionary<int, TrafficCounter> ByProcess,
+    IReadOnlyDictionary<ProcessInstance, TrafficCounter> ByProcess,
     IReadOnlyDictionary<RemoteKey, TrafficCounter> ByRemote,
     DateTime TakenAtUtc);
 
 /// <summary>
 /// Thread-safe running totals of network traffic: per connection, per process, and per
-/// process + remote address. The ETW listener writes into it from a background thread;
+/// process + remote address. A "process" here is a <see cref="ProcessInstance"/>, one run of a program. The ETW listener writes into it from a background thread;
 /// the UI reads snapshots.
 /// </summary>
 public sealed class TrafficAggregator
@@ -38,7 +38,7 @@ public sealed class TrafficAggregator
     private readonly object _gate = new();
     private readonly Dictionary<TrafficKey, (TrafficCounter Counter, DateTime LastSeenUtc)> _byConnection = new();
     private readonly Dictionary<RemoteKey, (TrafficCounter Counter, DateTime LastSeenUtc)> _byRemote = new();
-    private readonly Dictionary<int, TrafficCounter> _byProcess = new();
+    private readonly Dictionary<ProcessInstance, TrafficCounter> _byProcess = new();
     private readonly Func<DateTime> _clock;
 
     public TrafficAggregator()
@@ -51,7 +51,7 @@ public sealed class TrafficAggregator
         _clock = clock;
     }
 
-    public void Record(Protocol protocol, int processId, IPEndPoint local, IPEndPoint? remote, long bytes, Direction direction)
+    public void Record(Protocol protocol, ProcessInstance process, IPEndPoint local, IPEndPoint? remote, long bytes, Direction direction)
     {
         if (bytes <= 0)
         {
@@ -60,8 +60,8 @@ public sealed class TrafficAggregator
 
         // UDP rows in the connection table have no remote side, but the remote address is
         // still useful for "which servers did this program talk to".
-        var connectionKey = TrafficKey.For(protocol, processId, local, protocol == Protocol.Tcp ? remote : null);
-        RemoteKey? remoteKey = remote is null ? null : new RemoteKey(processId, IpAddresses.Normalize(remote.Address));
+        var connectionKey = TrafficKey.For(protocol, process, local, protocol == Protocol.Tcp ? remote : null);
+        RemoteKey? remoteKey = remote is null ? null : new RemoteKey(process, IpAddresses.Normalize(remote.Address));
         var now = _clock();
 
         lock (_gate)
@@ -75,8 +75,8 @@ public sealed class TrafficAggregator
                 _byRemote[rk] = (remoteEntry.Counter.Add(direction, bytes), now);
             }
 
-            _byProcess.TryGetValue(processId, out var processCounter);
-            _byProcess[processId] = processCounter.Add(direction, bytes);
+            _byProcess.TryGetValue(process, out var processCounter);
+            _byProcess[process] = processCounter.Add(direction, bytes);
         }
     }
 
@@ -86,7 +86,7 @@ public sealed class TrafficAggregator
         {
             return new TrafficSnapshot(
                 _byConnection.ToDictionary(kv => kv.Key, kv => kv.Value.Counter),
-                new Dictionary<int, TrafficCounter>(_byProcess),
+                new Dictionary<ProcessInstance, TrafficCounter>(_byProcess),
                 _byRemote.ToDictionary(kv => kv.Key, kv => kv.Value.Counter),
                 _clock());
         }

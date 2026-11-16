@@ -12,17 +12,17 @@ namespace TattleTail.Core;
 /// a wildcard address (0.0.0.0) and talk to many peers, so UDP traffic is keyed by the
 /// local port only.
 /// </remarks>
-public readonly record struct TrafficKey(Protocol Protocol, int ProcessId, string Local, string Remote)
+public readonly record struct TrafficKey(Protocol Protocol, ProcessInstance Process, string Local, string Remote)
 {
-    public static TrafficKey For(Protocol protocol, int processId, IPEndPoint local, IPEndPoint? remote)
+    public static TrafficKey For(Protocol protocol, ProcessInstance process, IPEndPoint local, IPEndPoint? remote)
     {
         if (protocol == Protocol.Udp)
         {
             var family = IpAddresses.Normalize(local.Address).AddressFamily == AddressFamily.InterNetworkV6 ? "v6" : "v4";
-            return new TrafficKey(protocol, processId, $"{family}:{local.Port}", string.Empty);
+            return new TrafficKey(protocol, process, $"{family}:{local.Port}", string.Empty);
         }
 
-        return new TrafficKey(protocol, processId, Describe(local), remote is null ? string.Empty : Describe(remote));
+        return new TrafficKey(protocol, process, Describe(local), remote is null ? string.Empty : Describe(remote));
     }
 
     private static string Describe(IPEndPoint endpoint) =>

@@ -8,13 +8,17 @@ public sealed class ProgramRow : TrafficRowBase
     private int _connectionCount;
     private bool _isRunning = true;
 
-    public ProgramRow(ProcessDetails process)
+    public ProgramRow(ProcessInstance process, ProcessDetails details)
     {
-        ProcessId = process.ProcessId;
-        ProcessName = process.Name;
-        ProcessPath = process.Path;
-        ProgramKey = MakeKey(process);
+        Process = process;
+        ProcessId = details.ProcessId;
+        ProcessName = details.Name;
+        ProcessPath = details.Path;
+        ProgramKey = MakeKey(details);
     }
+
+    /// <summary>This run of the program. Process ids get reused; this doesn't.</summary>
+    public ProcessInstance Process { get; }
 
     /// <summary>
     /// The identity used for history: the executable path, so a program keeps its history
@@ -33,7 +37,7 @@ public sealed class ProgramRow : TrafficRowBase
         set => SetField(ref _connectionCount, value);
     }
 
-    /// <summary>False once the program has no open sockets left (totals are kept).</summary>
+    /// <summary>False once the program has exited (totals are kept).</summary>
     public bool IsRunning
     {
         get => _isRunning;

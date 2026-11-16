@@ -21,7 +21,7 @@ public sealed class TrafficDeltaCalculator
 
             if (sent > 0 || received > 0)
             {
-                deltas.Add(new TrafficDelta(key.ProcessId, key.Address, sent, received));
+                deltas.Add(new TrafficDelta(key.Process, key.Address, sent, received));
             }
         }
 

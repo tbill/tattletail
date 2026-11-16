@@ -64,6 +64,13 @@ internal static class SmokeTest
                 namedConnections,
                 programs = viewModel.Programs.Count,
                 programsWithTraffic = viewModel.Programs.Count(p => p.TotalBytes > 0),
+                programsExited = viewModel.Programs.Count(p => !p.IsRunning),
+                programsUnnamed = viewModel.Programs.Count(p => p.ProcessName == ProcessRegistry.UnknownName),
+                exitedProgramNames = viewModel.Programs
+                    .Where(p => !p.IsRunning && p.TotalBytes > 0).Select(p => p.ProcessName).Distinct(),
+                topPrograms = viewModel.Programs
+                    .OrderByDescending(p => p.TotalBytes).Take(10)
+                    .Select(p => $"{p.ProcessName} (PID {p.ProcessId}{(p.IsRunning ? "" : ", exited")}, {ByteFormatter.Format(p.TotalBytes)})"),
                 totalBytes = viewModel.Programs.Sum(p => p.TotalBytes),
                 servers = viewModel.HistoryPanel.Servers.Count,
                 groupedByDomain = viewModel.HistoryPanel.GroupByDomain,
@@ -79,6 +86,7 @@ internal static class SmokeTest
                     : viewModel.HistoryPanel.Points.Max(p => p.SendRate + p.ReceiveRate),
                 trafficStatus = viewModel.TrafficStatus,
                 namesStatus = viewModel.NamesStatus,
+                historyStatus = viewModel.HistoryStatus,
                 summary = viewModel.Summary,
             };
 

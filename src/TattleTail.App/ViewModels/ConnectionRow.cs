@@ -10,12 +10,12 @@ public sealed class ConnectionRow : TrafficRowBase
     private string? _remoteName;
     private AddressDisplay _display;
 
-    public ConnectionRow(ConnectionInfo info, ProcessDetails process)
+    public ConnectionRow(ConnectionInfo info, ProcessInstance process, ProcessDetails details)
     {
-        Id = MakeId(info);
-        TrafficKey = info.TrafficKey;
-        ProcessName = process.Name;
-        ProcessPath = process.Path;
+        Id = MakeId(info, process);
+        TrafficKey = info.TrafficKeyFor(process);
+        ProcessName = details.Name;
+        ProcessPath = details.Path;
         ProcessId = info.ProcessId;
         Protocol = info.Protocol == Core.Protocol.Tcp ? "TCP" : "UDP";
         LocalAddress = info.Local.ToString();
@@ -69,8 +69,12 @@ public sealed class ConnectionRow : TrafficRowBase
         OnPropertyChanged(nameof(RemoteDomain));
     }
 
-    public static string MakeId(ConnectionInfo info) =>
-        $"{info.Protocol}|{info.ProcessId}|{info.Local}|{info.Remote}";
+    /// <summary>
+    /// Includes the program, not just its process id, so a socket opened by a new program that
+    /// was given an old process id gets a fresh row with the right name.
+    /// </summary>
+    public static string MakeId(ConnectionInfo info, ProcessInstance process) =>
+        $"{info.Protocol}|{process.Id}|{info.Local}|{info.Remote}";
 
     public bool Matches(string filter) =>
         ProcessName.Contains(filter, StringComparison.OrdinalIgnoreCase)

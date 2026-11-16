@@ -24,5 +24,6 @@ public sealed record ConnectionInfo(
     int ProcessId)
 {
     /// <summary>The key used to match this connection against recorded traffic.</summary>
-    public TrafficKey TrafficKey => TrafficKey.For(Protocol, ProcessId, Local, Remote);
+    /// <param name="process">The program currently using <see cref="ProcessId"/>.</param>
+    public TrafficKey TrafficKeyFor(ProcessInstance process) => TrafficKey.For(Protocol, process, Local, Remote);
 }

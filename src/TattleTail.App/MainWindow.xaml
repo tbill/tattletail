@@ -76,6 +76,9 @@
             <StatusBarItem>
                 <TextBlock Text="{Binding NamesStatus}" Foreground="DarkRed" />
             </StatusBarItem>
+            <StatusBarItem>
+                <TextBlock Text="{Binding HistoryStatus}" Foreground="DarkRed" />
+            </StatusBarItem>
         </StatusBar>
 
         <TabControl Margin="8,4,8,8">
