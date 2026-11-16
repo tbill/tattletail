@@ -53,6 +53,13 @@ jobs:
           foreach ($url in 'https://github.com', 'https://api.github.com', 'https://www.microsoft.com', 'https://www.wikipedia.org', 'https://api.nuget.org/v3/index.json') {
             try { Invoke-WebRequest $url -UseBasicParsing -TimeoutSec 15 | Out-Null } catch { Write-Host "request to $url failed: $_" }
           }
+          # curl exits within a second, usually before TattleTail could look it up by process id.
+          # It must still be listed by name (learned from the kernel's process-start event).
+          foreach ($url in 'https://github.com', 'https://www.microsoft.com', 'https://www.wikipedia.org') {
+            & "$env:SystemRoot\System32\curl.exe" -s -o NUL --max-time 15 $url
+            Write-Host "curl $url exited with code $LASTEXITCODE"
+          }
+          $global:LASTEXITCODE = 0
           if (-not $app.WaitForExit(150000)) { $app.Kill(); throw 'TattleTail did not finish the smoke test in time' }
           if (-not (Test-Path $report)) { throw "No smoke test report (exit code $($app.ExitCode))" }
           Get-Content $report
@@ -60,6 +67,8 @@ jobs:
           if (-not $result.ok) { throw 'Smoke test failed: see report above' }
           if ($result.totalBytes -le 0) { throw 'No traffic was measured' }
           if ($result.servers -le 0) { throw 'No servers were recorded in history' }
+          if ($result.historyStatus) { throw "History problem: $($result.historyStatus)" }
+          if ($result.exitedProgramNames -notcontains 'curl') { throw 'The short-lived curl runs were not listed by name as exited programs' }
           if ($result.namedConnections -le 0) { Write-Warning 'No connections had website names' }
 
       - name: Upload smoke test report

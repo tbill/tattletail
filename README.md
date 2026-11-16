@@ -25,7 +25,8 @@ history charts going back 30 days.
 - Filter box to search by program name, PID, IP address, port or state.
 - Click any column header to sort. Rows re-sort live as the numbers change.
 - Hover a row to see the program's full path.
-- Programs that exit stay in the list, greyed out, so you can still see what they did.
+- Programs that exit stay in the list, greyed out, so you can still see what they did. Even a
+  program that runs for a split second is listed by name.
   Untick **Show exited programs** to hide them.
 - **Reset counters** sets every total back to zero.
 
@@ -85,9 +86,10 @@ ever sent anywhere. **Clear history…** deletes it all.
 |---|---|
 | `ConnectionTable` | Calls `GetExtendedTcpTable` / `GetExtendedUdpTable` (IP Helper API) to list sockets and their owning process IDs. |
 | `EtwTrafficMonitor` | Starts a real-time kernel ETW session (`NetworkTCPIP` keyword) using [TraceEvent](https://www.nuget.org/packages/Microsoft.Diagnostics.Tracing.TraceEvent) and receives an event for every TCP/UDP send and receive. |
+| `ProcessRegistry` | Knows which program owns each process ID right now. Windows reuses process IDs, so the kernel's process start/stop events (same ETW session) are used to keep a new program from inheriting an old one's name and totals. |
 | `TrafficAggregator` | Thread-safe running totals per connection, per process, and per process + remote address. |
 | `EtwDnsMonitor` / `HostNameCache` | Listens to `Microsoft-Windows-DNS-Client` event 3008 (query completed) to map addresses to names, with reverse DNS as a fallback. |
-| `TrafficHistory` / `HistoryStore` | Keeps the last 10 minutes per second in memory and writes per-minute, per-program, per-server rows to SQLite. |
+| `TrafficHistory` / `HistoryStore` | Keeps the last 10 minutes per second in memory and writes per-minute, per-program, per-server rows to SQLite on a background thread. A minute that can't be saved is kept and retried. |
 | `MainViewModel` | Once a second, merges the socket list with a traffic snapshot, records history and works out rates. |
 
 TCP traffic is matched to a connection by its exact local and remote address and port.

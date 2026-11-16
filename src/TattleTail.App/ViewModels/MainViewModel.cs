@@ -24,13 +24,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private readonly EtwTrafficMonitor _trafficMonitor;
     private readonly HostNameCache _names = new();
     private readonly EtwDnsMonitor _dnsMonitor;
-    private readonly ProcessNameResolver _resolver = new();
+    private readonly ProcessRegistry _processes = new();
     private readonly TrafficDeltaCalculator _deltas = new();
     private readonly HistoryStore? _store;
     private readonly TrafficHistory _history;
     private readonly DispatcherTimer _timer;
     private readonly Dictionary<string, ConnectionRow> _connectionsById = new();
-    private readonly Dictionary<int, ProgramRow> _programsById = new();
+    private readonly Dictionary<ProcessInstance, ProgramRow> _programsById = new();
 
     private DateTime _lastSnapshotUtc = DateTime.UtcNow;
     private DateTime _lastPruneUtc = DateTime.MinValue;
@@ -38,6 +38,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private string _filter = string.Empty;
     private string _trafficStatus = string.Empty;
     private string _namesStatus = string.Empty;
+    private string _historyStatus = string.Empty;
+    private string? _historyUnavailable;
     private string _summary = string.Empty;
     private bool _trafficAvailable;
 
@@ -53,13 +55,15 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         catch (Exception ex)
         {
             // Still useful without saved history: charts just cover this session.
-            _namesStatus = "History won't be saved: " + ex.Message;
+            _historyUnavailable = "History won't be saved: " + ex.Message;
+            _historyStatus = _historyUnavailable;
         }
 
         _history = new TrafficHistory(
             _store,
-            pid => ProgramRow.MakeKey(_resolver.Resolve(pid)),
-            (ip, pid) => _names.GetName(ip, pid) ?? ip.ToString());
+            process => ProgramRow.MakeKey(_processes.GetDetails(process)),
+            (ip, process) => _names.GetName(ip, _processes.GetDetails(process).ProcessId) ?? ip.ToString(),
+            saveInBackground: true);
 
         HistoryPanel = new HistoryPanelViewModel(_history, _names, _settings);
 
@@ -73,7 +77,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             return (_settings.ShowExitedPrograms || row.IsRunning) && row.Matches(_filter);
         }, nameof(ProgramRow.IsRunning));
 
-        _trafficMonitor = new EtwTrafficMonitor(_aggregator);
+        _trafficMonitor = new EtwTrafficMonitor(_aggregator, _processes);
         _trafficMonitor.Faulted += ex => OnUiThread(() =>
         {
             TrafficAvailable = false;
@@ -184,6 +188,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         private set => SetField(ref _namesStatus, value);
     }
 
+    public string HistoryStatus
+    {
+        get => _historyStatus;
+        private set => SetField(ref _historyStatus, value);
+    }
+
     public string Summary
     {
         get => _summary;
@@ -237,14 +247,23 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         foreach (var row in Programs.Where(p => !p.IsRunning).ToList())
         {
             Programs.Remove(row);
-            _programsById.Remove(row.ProcessId);
+            _programsById.Remove(row.Process);
         }
     }
 
     /// <summary>Deletes all saved history (charts and server lists).</summary>
-    public void ClearHistory()
+    public async Task ClearHistoryAsync()
     {
-        _history.Clear();
+        try
+        {
+            // Off the UI thread: deleting waits its turn behind any history read in progress.
+            await Task.Run(_history.Clear);
+        }
+        catch (Exception ex)
+        {
+            HistoryStatus = "Could not clear history: " + ex.Message;
+        }
+
         HistoryPanel.RequestRefresh();
     }
 
@@ -255,26 +274,53 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
+        // This runs every second, so nothing in here may throw: an error that reached the
+        // window would pop up again every second. Each step reports its own trouble in the
+        // status bar and the remaining steps still run.
         _refreshing = true;
         try
         {
-            var connections = await Task.Run(ConnectionTable.GetAll);
+            List<ConnectionInfo>? connections = null;
+            try
+            {
+                connections = await Task.Run(ConnectionTable.GetAll);
+            }
+            catch (Exception ex)
+            {
+                Summary = "Could not read connections: " + ex.Message;
+            }
+
             var snapshot = _aggregator.Snapshot();
             var elapsed = (snapshot.TakenAtUtc - _lastSnapshotUtc).TotalSeconds;
             _lastSnapshotUtc = snapshot.TakenAtUtc;
 
-            UpdateConnections(connections, snapshot, elapsed);
-            UpdatePrograms(connections, snapshot, elapsed);
-            UpdateRemoteNames();
-            UpdateSummary();
+            if (connections is not null)
+            {
+                try
+                {
+                    var programs = AssignPrograms(connections);
+                    UpdateConnections(programs, snapshot, elapsed);
+                    UpdatePrograms(programs, snapshot, elapsed);
+                    UpdateRemoteNames();
+                    UpdateSummary();
+                }
+                catch (Exception ex)
+                {
+                    Summary = "Could not update the tables: " + ex.Message;
+                }
+            }
 
-            _history.Add(_deltas.Next(snapshot.ByRemote));
-            _aggregator.PruneConnections(ConnectionTrafficRetention);
-            PruneHistoryIfDue();
-        }
-        catch (Exception ex)
-        {
-            Summary = "Could not read connections: " + ex.Message;
+            try
+            {
+                _history.Add(_deltas.Next(snapshot.ByRemote));
+                _aggregator.PruneConnections(ConnectionTrafficRetention);
+                PruneHistoryIfDue();
+                UpdateHistoryStatus();
+            }
+            catch (Exception ex)
+            {
+                HistoryStatus = "Could not record history: " + ex.Message;
+            }
         }
         finally
         {
@@ -282,6 +328,25 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
 
         await HistoryPanel.TickAsync();
+    }
+
+    private void UpdateHistoryStatus()
+    {
+        HistoryStatus = _historyUnavailable
+            ?? (_history.SaveError is { } error ? "History isn't being saved (will keep trying): " + error : string.Empty);
+    }
+
+    /// <summary>Pairs every socket with the program that owns it right now.</summary>
+    private List<(ConnectionInfo Info, ProcessInstance Process)> AssignPrograms(List<ConnectionInfo> connections)
+    {
+        // Normally the kernel tells us when programs start and exit. Without that feed, the
+        // best clue that a process id has changed hands is that it stopped owning any sockets.
+        if (!TrafficAvailable)
+        {
+            _processes.MarkExitedExcept(connections.Select(c => c.ProcessId).ToHashSet());
+        }
+
+        return connections.Select(c => (c, _processes.GetInstance(c.ProcessId))).ToList();
     }
 
     private void PruneHistoryIfDue()
@@ -297,18 +362,19 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _ = Task.Run(() => _history.Prune(retention));
     }
 
-    private void UpdateConnections(List<ConnectionInfo> connections, TrafficSnapshot snapshot, double elapsed)
+    private void UpdateConnections(List<(ConnectionInfo Info, ProcessInstance Process)> connections,
+        TrafficSnapshot snapshot, double elapsed)
     {
         var seen = new HashSet<string>();
-        foreach (var info in connections)
+        foreach (var (info, process) in connections)
         {
-            var id = ConnectionRow.MakeId(info);
+            var id = ConnectionRow.MakeId(info, process);
             if (!seen.Add(id))
             {
                 continue;
             }
 
-            snapshot.ByConnection.TryGetValue(info.TrafficKey, out var traffic);
+            snapshot.ByConnection.TryGetValue(info.TrafficKeyFor(process), out var traffic);
 
             if (_connectionsById.TryGetValue(id, out var row))
             {
@@ -317,7 +383,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             }
             else
             {
-                row = new ConnectionRow(info, _resolver.Resolve(info.ProcessId));
+                row = new ConnectionRow(info, process, _processes.GetDetails(process));
                 row.UpdateTraffic(traffic, 0);
                 _connectionsById[id] = row;
                 Connections.Add(row);
@@ -349,22 +415,23 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         return _names.GetName(ip, processId);
     }
 
-    private void UpdatePrograms(List<ConnectionInfo> connections, TrafficSnapshot snapshot, double elapsed)
+    private void UpdatePrograms(List<(ConnectionInfo Info, ProcessInstance Process)> connections,
+        TrafficSnapshot snapshot, double elapsed)
     {
-        var connectionCounts = connections.GroupBy(c => c.ProcessId).ToDictionary(g => g.Key, g => g.Count());
-        var pids = new HashSet<int>(connectionCounts.Keys);
-        pids.UnionWith(snapshot.ByProcess.Keys);
+        var connectionCounts = connections.GroupBy(c => c.Process).ToDictionary(g => g.Key, g => g.Count());
+        var programs = new HashSet<ProcessInstance>(connectionCounts.Keys);
+        programs.UnionWith(snapshot.ByProcess.Keys);
 
-        foreach (var pid in pids)
+        foreach (var process in programs)
         {
-            snapshot.ByProcess.TryGetValue(pid, out var traffic);
-            connectionCounts.TryGetValue(pid, out var count);
+            snapshot.ByProcess.TryGetValue(process, out var traffic);
+            connectionCounts.TryGetValue(process, out var count);
 
-            if (!_programsById.TryGetValue(pid, out var row))
+            if (!_programsById.TryGetValue(process, out var row))
             {
-                row = new ProgramRow(_resolver.Resolve(pid));
+                row = new ProgramRow(process, _processes.GetDetails(process));
                 row.UpdateTraffic(traffic, 0);
-                _programsById[pid] = row;
+                _programsById[process] = row;
                 Programs.Add(row);
             }
             else
@@ -373,10 +440,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             }
 
             row.ConnectionCount = count;
-            row.IsRunning = count > 0;
+            row.IsRunning = !_processes.HasExited(process);
         }
 
-        foreach (var gone in _programsById.Keys.Where(pid => !pids.Contains(pid)).ToList())
+        foreach (var gone in _programsById.Keys.Where(process => !programs.Contains(process)).ToList())
         {
             var row = _programsById[gone];
             if (HistoryPanel.SelectedProgram == row)
@@ -388,7 +455,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             _programsById.Remove(gone);
         }
 
-        _resolver.Retain(pids);
+        _processes.Retain(programs);
     }
 
     private void UpdateSummary()

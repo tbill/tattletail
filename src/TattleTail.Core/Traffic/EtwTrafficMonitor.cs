@@ -7,11 +7,15 @@ namespace TattleTail.Core;
 
 /// <summary>
 /// Listens to the Windows kernel's network events (Event Tracing for Windows) and feeds
-/// every send/receive into a <see cref="TrafficAggregator"/>.
+/// every send/receive into a <see cref="TrafficAggregator"/>. It also hears every program
+/// start and exit, and tells the <see cref="ProcessRegistry"/>, so traffic is counted for the
+/// right program even when Windows reuses a process id.
 /// </summary>
 /// <remarks>
 /// Requires administrator rights. The kernel reports the local endpoint as the "source"
-/// (saddr/sport) for both sends and receives.
+/// (saddr/sport) for both sends and receives. Process and network events arrive in one
+/// stream, in the order they happened, so a packet is always matched to the program that
+/// owned the process id at that moment.
 /// </remarks>
 [SupportedOSPlatform("windows")]
 public sealed class EtwTrafficMonitor : IDisposable
@@ -19,12 +23,14 @@ public sealed class EtwTrafficMonitor : IDisposable
     public const string SessionName = "TattleTail-Network";
 
     private readonly TrafficAggregator _aggregator;
+    private readonly ProcessRegistry _processes;
     private TraceEventSession? _session;
     private Thread? _thread;
 
-    public EtwTrafficMonitor(TrafficAggregator aggregator)
+    public EtwTrafficMonitor(TrafficAggregator aggregator, ProcessRegistry processes)
     {
         _aggregator = aggregator;
+        _processes = processes;
     }
 
     /// <summary>Raised (on a background thread) if the event session stops unexpectedly.</summary>
@@ -49,9 +55,15 @@ public sealed class EtwTrafficMonitor : IDisposable
         // If an earlier run crashed, a session with this name may still exist; the default
         // options stop it and start fresh.
         var session = new TraceEventSession(SessionName) { StopOnDispose = true };
-        session.EnableKernelProvider(KernelTraceEventParser.Keywords.NetworkTCPIP);
+        session.EnableKernelProvider(
+            KernelTraceEventParser.Keywords.NetworkTCPIP | KernelTraceEventParser.Keywords.Process);
 
         var kernel = session.Source.Kernel;
+
+        // DCStart is the list of programs already running, sent when the session begins.
+        kernel.ProcessDCStart += e => _processes.ProcessSeen(e.ProcessID, e.ImageFileName);
+        kernel.ProcessStart += e => _processes.ProcessStarted(e.ProcessID, e.ImageFileName);
+        kernel.ProcessStop += e => _processes.ProcessStopped(e.ProcessID, e.ImageFileName);
 
         kernel.TcpIpSend += e => Record(Protocol.Tcp, e.ProcessID, e.saddr, e.sport, e.daddr, e.dport, e.size, Direction.Sent);
         kernel.TcpIpRecv += e => Record(Protocol.Tcp, e.ProcessID, e.saddr, e.sport, e.daddr, e.dport, e.size, Direction.Received);
@@ -86,7 +98,7 @@ public sealed class EtwTrafficMonitor : IDisposable
     private void Record(Protocol protocol, int processId, IPAddress localAddress, int localPort,
         IPAddress remoteAddress, int remotePort, int size, Direction direction)
     {
-        _aggregator.Record(protocol, processId, new IPEndPoint(localAddress, localPort),
+        _aggregator.Record(protocol, _processes.GetInstance(processId), new IPEndPoint(localAddress, localPort),
             new IPEndPoint(remoteAddress, remotePort), size, direction);
     }
 

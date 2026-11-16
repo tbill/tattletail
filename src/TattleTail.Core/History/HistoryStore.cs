@@ -2,10 +2,29 @@ using Microsoft.Data.Sqlite;
 
 namespace TattleTail.Core;
 
+/// <summary>Where finished minutes of traffic history are kept.</summary>
+public interface IHistoryStore
+{
+    void Write(IReadOnlyList<HistoryRow> rows);
+
+    /// <summary>Total bytes per time bucket, oldest first. Buckets with no traffic are left out.</summary>
+    List<(long BucketMinute, long Sent, long Received)> GetSeries(long fromMinute, long toMinute, int bucketMinutes, string? program);
+
+    /// <summary>
+    /// Totals per program and remote address over a time window. <see cref="HistoryRow.Minute"/>
+    /// holds the last minute that address was seen.
+    /// </summary>
+    List<HistoryRow> GetRemoteTotals(long fromMinute, long toMinute, string? program);
+
+    int DeleteOlderThan(long minute);
+
+    void DeleteAll();
+}
+
 /// <summary>
 /// Saves per-minute traffic history in a small SQLite database file, so charts survive restarts.
 /// </summary>
-public sealed class HistoryStore : IDisposable
+public sealed class HistoryStore : IHistoryStore, IDisposable
 {
     private readonly object _gate = new();
     private readonly SqliteConnection _connection;
@@ -125,14 +144,13 @@ public sealed class HistoryStore : IDisposable
         {
             using var command = _connection.CreateCommand();
 
-            // The host column holds the most recently written name, so take the latest row's host.
+            // One pass over the window. When a query has a single MAX(), SQLite takes the other
+            // plain columns from the row that held the maximum, so "host" is the name on the
+            // newest row (https://sqlite.org/lang_select.html#bareagg). Looking the name up
+            // separately for every server made a month of history take seconds to read.
             command.CommandText = $"""
-                SELECT MAX(minute), program, ip,
-                       (SELECT t2.host FROM traffic t2
-                        WHERE t2.program = t.program AND t2.ip = t.ip AND t2.minute >= $from AND t2.minute < $to
-                        ORDER BY t2.minute DESC LIMIT 1),
-                       SUM(sent), SUM(received)
-                FROM traffic t
+                SELECT MAX(minute), program, ip, host, SUM(sent), SUM(received)
+                FROM traffic
                 WHERE minute >= $from AND minute < $to {(program is null ? "" : "AND program = $program")}
                 GROUP BY program, ip;
                 """;

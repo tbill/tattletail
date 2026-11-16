@@ -9,37 +9,58 @@ namespace TattleTail.Core;
 /// <remarks>
 /// Think of it as a notebook with two sections: a scratch pad holding the last ten minutes
 /// second by second (in memory, for the live chart), and a ledger with one line per program,
-/// server and minute (written to the <see cref="HistoryStore"/> once a minute).
+/// server and minute (written to the <see cref="IHistoryStore"/> once a minute).
+/// <para>A finished minute waits in a tray until it is safely in the store. If saving fails it
+/// stays in the tray, still shows on the charts, and is tried again a minute later.</para>
 /// </remarks>
 public sealed class TrafficHistory
 {
     public const string AllPrograms = "";
     private const int LiveSeconds = 10 * 60;
 
+    /// <summary>How many finished minutes to hold on to while the store can't be written.</summary>
+    internal const int MaxUnsavedMinutes = 60;
+
+    // _gate guards the in-memory state and is only ever held briefly. _ioGate is held around
+    // store reads and writes so that a finished minute is seen exactly once: in the tray or
+    // in the store, never both and never neither. Always take _ioGate first.
     private readonly object _gate = new();
-    private readonly HistoryStore? _store;
-    private readonly Func<int, string> _programFor;
-    private readonly Func<IPAddress, int, string> _hostFor;
+    private readonly object _ioGate = new();
+    private readonly IHistoryStore? _store;
+    private readonly Func<ProcessInstance, string> _programFor;
+    private readonly Func<IPAddress, ProcessInstance, string> _hostFor;
     private readonly Func<DateTime> _clock;
+    private readonly bool _saveInBackground;
+
+    // The tray: finished minutes not yet in the store, oldest first.
+    private readonly List<List<HistoryRow>> _unsaved = new();
+    private volatile string? _saveError;
 
     // Live section: program -> (unix second -> counter). AllPrograms holds the total.
     private readonly Dictionary<string, SortedDictionary<long, TrafficCounter>> _seconds = new();
 
     // Ledger line being filled for the current minute.
-    private readonly Dictionary<(string Program, IPAddress Ip), (int ProcessId, TrafficCounter Counter)> _pending = new();
+    private readonly Dictionary<(string Program, IPAddress Ip), (ProcessInstance Process, TrafficCounter Counter)> _pending = new();
     private long _pendingMinute = -1;
 
     /// <param name="store">Where finished minutes are saved; null keeps history in memory only.</param>
-    /// <param name="programFor">Maps a process id to a stable program identity (e.g. exe path).</param>
-    /// <param name="hostFor">Maps a remote address (and process id) to the name to store.</param>
-    public TrafficHistory(HistoryStore? store, Func<int, string> programFor, Func<IPAddress, int, string> hostFor,
-        Func<DateTime>? clock = null)
+    /// <param name="programFor">Maps a running program to a stable identity (e.g. exe path).</param>
+    /// <param name="hostFor">Maps a remote address (and the program talking to it) to the name to store.</param>
+    /// <param name="saveInBackground">
+    /// Save finished minutes on a background thread, so <see cref="Add"/> never waits for the disk.
+    /// </param>
+    public TrafficHistory(IHistoryStore? store, Func<ProcessInstance, string> programFor,
+        Func<IPAddress, ProcessInstance, string> hostFor, Func<DateTime>? clock = null, bool saveInBackground = false)
     {
+        _saveInBackground = saveInBackground;
         _store = store;
         _programFor = programFor;
         _hostFor = hostFor;
         _clock = clock ?? (() => DateTime.UtcNow);
     }
+
+    /// <summary>Why the last attempt to save history failed, or null if saving is working.</summary>
+    public string? SaveError => _saveError;
 
     /// <summary>Records one second's worth of traffic. Call about once a second.</summary>
     public void Add(IReadOnlyList<TrafficDelta> deltas)
@@ -48,12 +69,13 @@ public sealed class TrafficHistory
         var second = ToUnixSeconds(now);
         var minute = second / 60;
 
-        List<HistoryRow>? finished = null;
+        var minuteFinished = false;
         lock (_gate)
         {
             if (_pendingMinute >= 0 && minute != _pendingMinute)
             {
-                finished = TakePendingRows();
+                MovePendingToUnsaved();
+                minuteFinished = _unsaved.Count > 0;
             }
 
             _pendingMinute = minute;
@@ -62,7 +84,7 @@ public sealed class TrafficHistory
             var perProgram = new Dictionary<string, TrafficCounter>();
             foreach (var delta in deltas)
             {
-                var program = _programFor(delta.ProcessId);
+                var program = _programFor(delta.Process);
                 var counter = new TrafficCounter(delta.Sent, delta.Received);
 
                 perProgram[program] = Sum(perProgram.GetValueOrDefault(program), counter);
@@ -70,7 +92,7 @@ public sealed class TrafficHistory
 
                 var key = (program, IpAddresses.Normalize(delta.Remote));
                 var existing = _pending.GetValueOrDefault(key);
-                _pending[key] = (delta.ProcessId, Sum(existing.Counter, counter));
+                _pending[key] = (delta.Process, Sum(existing.Counter, counter));
             }
 
             AddSecond(AllPrograms, second, total);
@@ -82,22 +104,70 @@ public sealed class TrafficHistory
             TrimSeconds(second - LiveSeconds);
         }
 
-        if (finished is not null)
+        // Once a minute, which also makes it the retry after a failed save.
+        if (minuteFinished)
         {
-            _store?.Write(finished);
+            if (_saveInBackground)
+            {
+                _ = Task.Run(SaveUnsaved);
+            }
+            else
+            {
+                SaveUnsaved();
+            }
         }
     }
 
-    /// <summary>Writes the current partial minute to the store (call before closing).</summary>
+    /// <summary>Writes everything, including the current partial minute, to the store (call before closing).</summary>
     public void Flush()
     {
-        List<HistoryRow> rows;
-        lock (_gate)
+        lock (_ioGate)
         {
-            rows = TakePendingRows();
-        }
+            lock (_gate)
+            {
+                MovePendingToUnsaved();
+            }
 
-        _store?.Write(rows);
+            SaveUnsaved();
+        }
+    }
+
+    private void SaveUnsaved()
+    {
+        lock (_ioGate)
+        {
+            while (true)
+            {
+                List<HistoryRow> batch;
+                lock (_gate)
+                {
+                    if (_unsaved.Count == 0)
+                    {
+                        break;
+                    }
+
+                    batch = _unsaved[0];
+                }
+
+                try
+                {
+                    _store!.Write(batch);
+                }
+                catch (Exception ex)
+                {
+                    // Keep the minute in the tray; the next finished minute tries again.
+                    _saveError = ex.Message;
+                    return;
+                }
+
+                lock (_gate)
+                {
+                    _unsaved.Remove(batch);
+                }
+            }
+
+            _saveError = null;
+        }
     }
 
     /// <summary>
@@ -122,9 +192,10 @@ public sealed class TrafficHistory
             }
         }
 
-        lock (_gate)
+        if (range == HistoryRange.TenMinutes)
         {
-            if (range == HistoryRange.TenMinutes)
+            // The live chart is answered from memory alone, so it never waits for the disk.
+            lock (_gate)
             {
                 if (_seconds.TryGetValue(program, out var seconds))
                 {
@@ -134,22 +205,30 @@ public sealed class TrafficHistory
                     }
                 }
             }
-            else
-            {
-                foreach (var row in PendingRows(program))
-                {
-                    AddTo(row.Minute * 60, new TrafficCounter(row.Sent, row.Received));
-                }
-            }
         }
-
-        if (range != HistoryRange.TenMinutes && _store is not null)
+        else
         {
-            var rows = _store.GetSeries(firstBucket / 60, _pendingMinute >= 0 ? _pendingMinute : nowSecond / 60 + 1,
-                bucket / 60, program == AllPrograms ? null : program);
-            foreach (var (bucketMinute, sent, received) in rows)
+            lock (_ioGate)
             {
-                AddTo(bucketMinute * 60, new TrafficCounter(sent, received));
+                long pendingMinute;
+                lock (_gate)
+                {
+                    pendingMinute = _pendingMinute;
+                    foreach (var row in PendingRows(program).Concat(UnsavedRows(program)))
+                    {
+                        AddTo(row.Minute * 60, new TrafficCounter(row.Sent, row.Received));
+                    }
+                }
+
+                if (_store is not null)
+                {
+                    var rows = _store.GetSeries(firstBucket / 60, pendingMinute >= 0 ? pendingMinute : nowSecond / 60 + 1,
+                        bucket / 60, program == AllPrograms ? null : program);
+                    foreach (var (bucketMinute, sent, received) in rows)
+                    {
+                        AddTo(bucketMinute * 60, new TrafficCounter(sent, received));
+                    }
+                }
             }
         }
 
@@ -177,15 +256,19 @@ public sealed class TrafficHistory
         var fromMinute = nowMinute - (long)HistoryRanges.Duration(range).TotalMinutes + 1;
 
         List<HistoryRow> pending;
-        long pendingMinute;
-        lock (_gate)
+        List<HistoryRow> stored;
+        lock (_ioGate)
         {
-            pending = PendingRows(program).ToList();
-            pendingMinute = _pendingMinute;
-        }
+            long pendingMinute;
+            lock (_gate)
+            {
+                pending = UnsavedRows(program).Where(r => r.Minute >= fromMinute).Concat(PendingRows(program)).ToList();
+                pendingMinute = _pendingMinute;
+            }
 
-        var stored = _store?.GetRemoteTotals(fromMinute, pendingMinute >= 0 ? pendingMinute : nowMinute + 1,
-            program == AllPrograms ? null : program) ?? [];
+            stored = _store?.GetRemoteTotals(fromMinute, pendingMinute >= 0 ? pendingMinute : nowMinute + 1,
+                program == AllPrograms ? null : program) ?? [];
+        }
 
         var merged = new Dictionary<(string Program, string Ip), HistoryRow>();
         foreach (var row in stored.Concat(pending))
@@ -214,31 +297,50 @@ public sealed class TrafficHistory
 
     public void Clear()
     {
-        lock (_gate)
+        lock (_ioGate)
         {
-            _seconds.Clear();
-            _pending.Clear();
-        }
+            lock (_gate)
+            {
+                _seconds.Clear();
+                _pending.Clear();
+                _unsaved.Clear();
+            }
 
-        _store?.DeleteAll();
+            _store?.DeleteAll();
+        }
     }
 
     private IEnumerable<HistoryRow> PendingRows(string program) =>
         _pending
             .Where(kv => program == AllPrograms || kv.Key.Program == program)
-            .Select(kv => MakeRow(_pendingMinute, kv.Key.Program, kv.Key.Ip, kv.Value.ProcessId, kv.Value.Counter));
+            .Select(kv => MakeRow(_pendingMinute, kv.Key.Program, kv.Key.Ip, kv.Value.Process, kv.Value.Counter));
 
-    private List<HistoryRow> TakePendingRows()
+    private IEnumerable<HistoryRow> UnsavedRows(string program) =>
+        _unsaved.SelectMany(batch => batch).Where(row => program == AllPrograms || row.Program == program);
+
+    /// <summary>Closes the minute being filled and puts it in the tray to be saved.</summary>
+    private void MovePendingToUnsaved()
     {
         var rows = _pending
-            .Select(kv => MakeRow(_pendingMinute, kv.Key.Program, kv.Key.Ip, kv.Value.ProcessId, kv.Value.Counter))
+            .Select(kv => MakeRow(_pendingMinute, kv.Key.Program, kv.Key.Ip, kv.Value.Process, kv.Value.Counter))
             .ToList();
         _pending.Clear();
-        return rows;
+
+        // Without a store there is nowhere to save to, so there is nothing to wait for.
+        if (rows.Count == 0 || _store is null)
+        {
+            return;
+        }
+
+        _unsaved.Add(rows);
+        if (_unsaved.Count > MaxUnsavedMinutes)
+        {
+            _unsaved.RemoveAt(0);
+        }
     }
 
-    private HistoryRow MakeRow(long minute, string program, IPAddress ip, int processId, TrafficCounter counter) =>
-        new(minute, program, ip.ToString(), _hostFor(ip, processId), counter.Sent, counter.Received);
+    private HistoryRow MakeRow(long minute, string program, IPAddress ip, ProcessInstance process, TrafficCounter counter) =>
+        new(minute, program, ip.ToString(), _hostFor(ip, process), counter.Sent, counter.Received);
 
     private void AddSecond(string program, long second, TrafficCounter counter)
     {

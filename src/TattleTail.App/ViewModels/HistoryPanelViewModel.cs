@@ -15,8 +15,24 @@ public sealed record RangeOption(HistoryRange Value, string Label);
 /// </summary>
 public sealed class HistoryPanelViewModel : ObservableObject
 {
-    private const int SlowChartRefreshTicks = 15;
-    private const int ServerRefreshTicks = 5;
+    /// <summary>
+    /// Seconds between chart refreshes. The longer the range, the less one more second changes
+    /// the picture and the more history there is to read, so long ranges refresh less often.
+    /// </summary>
+    private static int ChartRefreshTicks(HistoryRange range) => range switch
+    {
+        HistoryRange.TenMinutes => 1,
+        HistoryRange.Hour or HistoryRange.Day => 15,
+        _ => 60,
+    };
+
+    /// <summary>Seconds between refreshes of the servers list.</summary>
+    private static int ServerRefreshTicks(HistoryRange range) => range switch
+    {
+        HistoryRange.TenMinutes or HistoryRange.Hour => 5,
+        HistoryRange.Day => 15,
+        _ => 60,
+    };
 
     private readonly TrafficHistory _history;
     private readonly HostNameCache _names;
@@ -168,8 +184,8 @@ public sealed class HistoryPanelViewModel : ObservableObject
         }
 
         var forced = _refreshRequested;
-        var updateChart = forced || _range == HistoryRange.TenMinutes || _tick % SlowChartRefreshTicks == 0;
-        var updateServers = forced || _tick % ServerRefreshTicks == 0;
+        var updateChart = forced || _tick % ChartRefreshTicks(_range) == 0;
+        var updateServers = forced || _tick % ServerRefreshTicks(_range) == 0;
         if (!updateChart && !updateServers)
         {
             return;
@@ -204,6 +220,11 @@ public sealed class HistoryPanelViewModel : ObservableObject
                              $"   ↓ {ByteFormatter.Format(remotes.Sum(r => r.Received))} received" +
                              (GroupByDomain ? $"   ·  {Servers.Count} domains" : $"   ·  {Servers.Count} servers");
             }
+        }
+        catch (Exception ex)
+        {
+            // This runs every second, so say what's wrong in place rather than in a pop-up.
+            TotalsText = "Could not read history: " + ex.Message;
         }
         finally
         {

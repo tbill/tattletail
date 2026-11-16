@@ -3,7 +3,7 @@ using System.Net;
 namespace TattleTail.Core;
 
 /// <summary>Bytes a program exchanged with one remote address since the previous second.</summary>
-public readonly record struct TrafficDelta(int ProcessId, IPAddress Remote, long Sent, long Received);
+public readonly record struct TrafficDelta(ProcessInstance Process, IPAddress Remote, long Sent, long Received);
 
 /// <summary>
 /// One stored row of history: bytes a program exchanged with one remote address during one minute.

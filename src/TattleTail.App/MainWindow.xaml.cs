@@ -129,14 +129,14 @@ public partial class MainWindow : Window
 
     private void OnShowAllProgramsClicked(object sender, RoutedEventArgs e) => ProgramsGrid.SelectedItem = null;
 
-    private void OnClearHistoryClicked(object sender, RoutedEventArgs e)
+    private async void OnClearHistoryClicked(object sender, RoutedEventArgs e)
     {
         var answer = MessageBox.Show(this,
             "Delete all saved traffic history? Charts and server lists will start over.",
             "Clear history", MessageBoxButton.OKCancel, MessageBoxImage.Warning, MessageBoxResult.Cancel);
         if (answer == MessageBoxResult.OK)
         {
-            _viewModel.ClearHistory();
+            await _viewModel.ClearHistoryAsync();
         }
     }
 }
