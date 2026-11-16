@@ -21,6 +21,15 @@ public sealed class AppSettings
     public HistoryRange HistoryRange { get; set; } = HistoryRange.TenMinutes;
     public int HistoryRetentionDays { get; set; } = 30;
 
+    /// <summary>Closing the window hides it in the system tray instead of quitting.</summary>
+    public bool KeepRunningInTray { get; set; } = true;
+
+    /// <summary>Pop up a notification when a program uses the network for the first time.</summary>
+    public bool AlertOnNewPrograms { get; set; } = true;
+
+    /// <summary>Whether the one-time "TattleTail is still running" hint has been shown.</summary>
+    public bool TrayHintShown { get; set; }
+
     private static string FilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "TattleTail", "settings.json");
 

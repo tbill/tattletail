@@ -32,10 +32,12 @@ internal static class SmokeTest
         var started = DateTime.UtcNow;
         var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         var switchedRange = false;
+        bool? hiddenAtStart = null;
 
         timer.Tick += async (_, _) =>
         {
             var elapsed = (DateTime.UtcNow - started).TotalSeconds;
+            hiddenAtStart ??= !window.IsVisible; // a second after starting: was it a background start?
 
             // Halfway through, switch to the hour view so the database path is exercised too.
             if (!switchedRange && elapsed > seconds / 2.0)
@@ -54,12 +56,21 @@ internal static class SmokeTest
             viewModel.HistoryPanel.RequestRefresh();
             await viewModel.HistoryPanel.TickAsync();
 
+            // Proves Windows accepts the sign-in task; leaves the machine as it was.
+            var autoStart = await Task.Run(AutoStart.SelfTest);
+
             var namedConnections = viewModel.Connections.Count(c =>
                 c.RemoteIp is not null && c.RemoteText != c.RemoteIp.ToString());
             var report = new
             {
                 ok = viewModel.Connections.Count > 0 && viewModel.TrafficAvailable,
                 version = AppVersion.Display,
+                hiddenAtStart,
+                windowVisible = window.IsVisible,
+                trayIconVisible = window.TrayIconVisible,
+                trayText = viewModel.TrayText,
+                autoStart,
+                historyText = viewModel.HistoryPanel.TotalsText,
                 connections = viewModel.Connections.Count,
                 namedConnections,
                 programs = viewModel.Programs.Count,
@@ -91,7 +102,7 @@ internal static class SmokeTest
             };
 
             File.WriteAllText(reportPath, JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));
-            window.Close();
+            window.ExitApp();
         };
 
         timer.Start();

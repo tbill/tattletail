@@ -34,8 +34,21 @@
     <DockPanel>
         <!-- Toolbar -->
         <DockPanel DockPanel.Dock="Top" Margin="8,8,8,4" LastChildFill="True">
+            <Menu DockPanel.Dock="Right" Margin="6,0,0,0" VerticalAlignment="Center" Background="Transparent">
+                <MenuItem Header="Options ▾" Padding="8,3">
+                    <MenuItem Header="Start with Windows (in the tray)" IsCheckable="True"
+                              IsChecked="{Binding StartWithWindows}" IsEnabled="{Binding StartWithWindowsReady}"
+                              ToolTip="Start TattleTail when you sign in, hidden in the system tray, so traffic history has no gaps.&#x0a;Uses a Windows scheduled task, so there's no administrator prompt each time." />
+                    <MenuItem Header="Keep running in the tray when the window is closed" IsCheckable="True"
+                              IsChecked="{Binding KeepRunningInTray}"
+                              ToolTip="Closing the window hides it; click the tray icon to bring it back.&#x0a;To quit, right-click the tray icon and choose Exit." />
+                    <MenuItem Header="Alert when a new program uses the network" IsCheckable="True"
+                              IsChecked="{Binding AlertOnNewPrograms}"
+                              ToolTip="Show a notification the first time a program sends or receives anything." />
+                </MenuItem>
+            </Menu>
             <Button DockPanel.Dock="Right" Content="Clear history…" Padding="10,3" Margin="6,0,0,0"
-                    Click="OnClearHistoryClicked" ToolTip="Delete all saved traffic history" />
+                    Click="OnClearHistoryClicked" ToolTip="Delete all saved traffic history, and the list of programs already seen on the network" />
             <Button DockPanel.Dock="Right" Content="Reset counters" Padding="10,3" Margin="6,0,0,0"
                     Click="OnResetClicked" ToolTip="Set the live totals in the tables back to zero (history is kept)" />
             <CheckBox DockPanel.Dock="Right" Content="Show exited programs" VerticalAlignment="Center" Margin="12,0,0,0"

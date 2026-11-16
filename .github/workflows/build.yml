@@ -35,15 +35,16 @@ jobs:
           name: TattleTail-win-x64
           path: publish/TattleTail.exe
 
-      # Launch the real app on the Windows runner, make some web requests while it watches,
-      # and check it saw connections, traffic, website names and history.
+      # Launch the real app on the Windows runner, hidden in the tray as at sign-in, make some web
+      # requests while it watches, and check it saw connections, traffic, website names and history.
       - name: Smoke test
         run: |
           $report = Join-Path $PWD 'smoke.json'
-          $app = Start-Process publish/TattleTail.exe -ArgumentList '--smoke-test', "`"$report`"", '35' -PassThru
+          $app = Start-Process publish/TattleTail.exe -ArgumentList '--smoke-test', "`"$report`"", '35', '--background' -PassThru
           Start-Sleep -Seconds 6
 
           # A second copy must hand over to the first and exit, not steal its event feeds.
+          # It also asks the first copy, which started hidden, to show its window.
           # The web requests below come after this, so the report also proves the first copy kept counting.
           $second = Start-Process publish/TattleTail.exe -PassThru
           if (-not $second.WaitForExit(20000)) { $second.Kill(); throw 'A second TattleTail did not exit while the first was running' }
@@ -67,6 +68,11 @@ jobs:
           if (-not $result.ok) { throw 'Smoke test failed: see report above' }
           if ($result.totalBytes -le 0) { throw 'No traffic was measured' }
           if ($result.servers -le 0) { throw 'No servers were recorded in history' }
+          if (-not $result.hiddenAtStart) { throw 'A --background start showed the window' }
+          if (-not $result.windowVisible) { throw 'Starting a second copy did not bring back the hidden window' }
+          if (-not $result.trayIconVisible) { throw 'No tray icon' }
+          if ($result.autoStart -ne 'ok') { throw "Start with Windows: $($result.autoStart)" }
+          if ($result.historyText -like 'Could not*') { throw "History panel: $($result.historyText)" }
           if ($result.historyStatus) { throw "History problem: $($result.historyStatus)" }
           if ($result.exitedProgramNames -notcontains 'curl') { throw 'The short-lived curl runs were not listed by name as exited programs' }
           if ($result.namedConnections -le 0) { Write-Warning 'No connections had website names' }
