@@ -2,7 +2,14 @@ using System.Diagnostics;
 
 namespace TattleTail.Core;
 
-public sealed record ProcessDetails(int ProcessId, string Name, string? Path);
+/// <param name="Service">
+/// For the Windows service host (svchost.exe): the services running inside it, e.g. "Windows Update".
+/// </param>
+public sealed record ProcessDetails(int ProcessId, string Name, string? Path, string? Service = null)
+{
+    /// <summary>The name to show: "chrome", or "svchost (Windows Update)".</summary>
+    public string DisplayName => Service is null ? Name : $"{Name} ({Service})";
+}
 
 /// <summary>Asks the operating system for a process's name and executable path.</summary>
 public static class ProcessNameResolver
@@ -31,7 +38,7 @@ public static class ProcessNameResolver
                 // Protected or 32/64-bit mismatched processes don't expose their modules.
             }
 
-            return new ProcessDetails(processId, process.ProcessName, path);
+            return new ProcessDetails(processId, process.ProcessName, path, ServicesIn(processId, process.ProcessName));
         }
         catch (ArgumentException)
         {
@@ -40,6 +47,24 @@ public static class ProcessNameResolver
         catch (InvalidOperationException)
         {
             return null;
+        }
+    }
+
+    /// <summary>For svchost.exe, a label naming the services inside it; otherwise null.</summary>
+    private static string? ServicesIn(int processId, string processName)
+    {
+        if (!OperatingSystem.IsWindows() || !ProgramIdentity.IsServiceHost(processName))
+        {
+            return null;
+        }
+
+        try
+        {
+            return ProgramIdentity.ServiceLabel(ServiceTable.GetForProcess(processId).Select(s => s.DisplayName));
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return null; // plain "svchost" is still better than nothing
         }
     }
 }

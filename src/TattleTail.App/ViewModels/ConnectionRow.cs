@@ -14,7 +14,7 @@ public sealed class ConnectionRow : TrafficRowBase
     {
         Id = MakeId(info, process);
         TrafficKey = info.TrafficKeyFor(process);
-        ProcessName = details.Name;
+        ProcessName = details.DisplayName;
         ProcessPath = details.Path;
         ProcessId = info.ProcessId;
         Protocol = info.Protocol == Core.Protocol.Tcp ? "TCP" : "UDP";

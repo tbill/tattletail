@@ -467,7 +467,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             .Distinct()
             .Select(_processes.GetDetails)
             .Where(d => d.Name != ProcessRegistry.UnknownName)
-            .Select(d => (Key: ProgramRow.MakeKey(d), d.Name))
+            .Select(d => (Key: ProgramRow.MakeKey(d), Name: d.DisplayName))
             .ToList();
         if (programs.Count == 0)
         {
